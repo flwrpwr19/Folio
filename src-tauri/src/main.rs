@@ -2,7 +2,7 @@
 
 pub mod commands;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -32,6 +32,7 @@ pub struct UiItem {
     pub size: u64,
     pub modified: u64,
     pub exif: Option<UiExif>,
+    pub focus_score: Option<f64>,
 }
 
 pub struct AppState {
@@ -44,9 +45,11 @@ pub struct AppState {
     /// List of recently opened folder paths
     pub recent_folders: RwLock<Vec<String>>,
     /// In-memory cache of already resolved thumbnail paths: key is (path_string, max_side), value is thumb_path_string
-    pub resolved_thumbs: RwLock<HashMap<(String, u32), String>>,
+    pub resolved_thumbs: parking_lot::Mutex<lru::LruCache<(String, u32), String>>,
     pub watcher: RwLock<Option<notify::RecommendedWatcher>>,
-    pub dominant_colors: RwLock<HashMap<String, Vec<String>>>,
+    pub dominant_colors: parking_lot::Mutex<lru::LruCache<String, Vec<String>>>,
+    /// Pre-computed canonical roots for fast sandbox checks
+    pub canonical_roots: RwLock<HashSet<PathBuf>>,
 }
 
 pub fn get_recents_path() -> std::path::PathBuf {
@@ -61,7 +64,14 @@ pub fn load_recent_folders() -> Vec<String> {
     if path.exists() {
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(list) = serde_json::from_str::<Vec<String>>(&content) {
-                return list;
+                let mut valid_list = Vec::new();
+                for p_str in list {
+                    let p = std::path::Path::new(&p_str);
+                    if p.exists() && p.is_dir() {
+                        valid_list.push(p_str);
+                    }
+                }
+                return valid_list;
             }
         }
     }
@@ -86,45 +96,49 @@ fn parse_range(header: &str, file_len: u64) -> Option<(u64, u64)> {
     } else {
         start_str.parse().ok()?
     };
-    let end: u64 = if end_str.is_empty() { file_len - 1 } else { end_str.parse().ok()? };
+    let end: u64 = if end_str.is_empty() { file_len.saturating_sub(1) } else { end_str.parse().ok()? };
     if start <= end && start < file_len { Some((start, end.min(file_len - 1))) } else { None }
 }
 
-fn is_path_safe(path: &Path, state: &AppState) -> bool {
+pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
     let Ok(canonical_path) = path.canonicalize() else {
         return false;
     };
     
-    // Check active index root
-    if let Some(ref idx) = *state.index.read() {
-        if let Ok(idx_root) = idx.root.canonicalize() {
-            if canonical_path.starts_with(&idx_root) {
-                return true;
-            }
-        }
-    }
-    
-    // Check application cache root
-    let cache_base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
-    let cache_root = cache_base.join("folio-app");
-    if let Ok(cache_root_canonical) = cache_root.canonicalize() {
-        if canonical_path.starts_with(&cache_root_canonical) {
+    let roots = state.canonical_roots.read();
+    for root in roots.iter() {
+        if canonical_path.starts_with(root) {
             return true;
         }
     }
     
-    // Check recent folders
-    let recents = state.recent_folders.read().clone();
-    for recent_str in recents {
-        let recent_path = PathBuf::from(&recent_str);
-        if let Ok(recent_canonical) = recent_path.canonicalize() {
-            if canonical_path.starts_with(&recent_canonical) {
-                return true;
-            }
+    false
+}
+
+pub fn rebuild_canonical_roots(state: &AppState) {
+    let mut new_roots = HashSet::new();
+    
+    if let Some(ref idx) = *state.index.read() {
+        if let Ok(idx_root) = idx.root.canonicalize() {
+            new_roots.insert(idx_root);
         }
     }
     
-    false
+    let cache_base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+    let cache_root = cache_base.join("folio-app");
+    if let Ok(cache_root_canonical) = cache_root.canonicalize() {
+        new_roots.insert(cache_root_canonical);
+    }
+    
+    let recents = state.recent_folders.read();
+    for recent_str in recents.iter() {
+        let recent_path = PathBuf::from(recent_str);
+        if let Ok(recent_canonical) = recent_path.canonicalize() {
+            new_roots.insert(recent_canonical);
+        }
+    }
+    
+    *state.canonical_roots.write() = new_roots;
 }
 
 fn main() {
@@ -135,10 +149,13 @@ fn main() {
         edits: RwLock::new(HashMap::new()),
         preview_cache: commands::media::ImageLruCache::new(512 * 1024 * 1024), // 512MB RAM preview cache
         recent_folders: RwLock::new(load_recent_folders()),
-        resolved_thumbs: RwLock::new(HashMap::new()),
+        resolved_thumbs: parking_lot::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap())),
         watcher: RwLock::new(None),
-        dominant_colors: RwLock::new(HashMap::new()),
+        dominant_colors: parking_lot::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap())),
+        canonical_roots: RwLock::new(HashSet::new()),
     });
+
+    rebuild_canonical_roots(&app_state);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -211,11 +228,15 @@ fn main() {
                     if let Some((start, end)) = parse_range(range_val, file_len) {
                         let length = end - start + 1;
                         let chunk_size = length.min(1 * 1024 * 1024); // 1MB chunks to curb memory footprint spikes
-                        use std::io::{Read, Seek, SeekFrom};
-                        let mut file = match std::fs::File::open(&path) {
+                        
+                        let file = match std::fs::File::open(&path) {
                             Ok(f) => f,
                             Err(_) => return tauri::http::Response::builder().status(500).body(vec![]).unwrap(),
                         };
+                        
+                        // Seek and read safely without unsafe memory mapping
+                        use std::io::{Read, Seek, SeekFrom};
+                        let mut file = file;
                         let _ = file.seek(SeekFrom::Start(start));
                         let mut buf = vec![0u8; chunk_size as usize];
                         let bytes_read = file.read(&mut buf).unwrap_or(0);
@@ -232,19 +253,26 @@ fn main() {
                 }
             }
 
-            match std::fs::read(&path) {
-                Ok(data) => {
-                    let cache_val = if path_str.contains("/thumbs/") || path_str.contains("/decoded/") { "public, max-age=604800, immutable" } else { "public, max-age=3600" };
-                    tauri::http::Response::builder()
-                        .header("Access-Control-Allow-Origin", "*")
-                        .header("Content-Type", mime.as_ref())
-                        .header("Cache-Control", cache_val)
-                        .header("ETag", etag)
-                        .header("Content-Length", data.len().to_string())
-                        .body(data).unwrap()
-                }
-                Err(_) => tauri::http::Response::builder().status(404).body(vec![]).unwrap(),
-            }
+            use std::io::Read;
+            let file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => return tauri::http::Response::builder().status(404).body(vec![]).unwrap(),
+            };
+            let mut file = std::io::BufReader::new(file);
+            let mut data = Vec::with_capacity(file_len as usize);
+            let _ = file.read_to_end(&mut data);
+            let cache_val = if path_str.contains("/thumbs/") || path_str.contains("/decoded/") {
+                "public, max-age=604800, immutable"
+            } else {
+                "public, max-age=3600"
+            };
+            tauri::http::Response::builder()
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Content-Type", mime.as_ref())
+                .header("Cache-Control", cache_val)
+                .header("ETag", etag)
+                .header("Content-Length", data.len().to_string())
+                .body(data).unwrap()
         })
         .setup(|app| {
             use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
@@ -305,8 +333,10 @@ fn main() {
             commands::media::edit_image,
             commands::media::export_edited,
             commands::media::get_dominant_colors,
+            commands::media::get_folder_dominant_colors,
             commands::media::find_visual_duplicates,
             commands::media::batch_transcode,
+            commands::media::get_visual_histogram,
 
             commands::metadata::update_exif_metadata,
             commands::metadata::add_tag_to_image,
@@ -320,6 +350,14 @@ fn main() {
             commands::metadata::get_folder_tags_summary,
             commands::metadata::get_edit,
             commands::metadata::set_edit,
+            commands::storage::get_storage_diagnostics,
+            commands::storage::purge_cache,
+            commands::secure::authenticate_vault,
+            commands::secure::scrub_exif_metadata,
+            commands::secure::audit_file_checksum,
+            commands::secure::search_directory_spotlight,
+            commands::secure::show_native_share_sheet,
+            commands::secure::submit_crash_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

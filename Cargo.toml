@@ -27,7 +27,7 @@ lru = "0.16"
 parking_lot = "0.12"
 rayon = "1.11"
 rfd = "0.15"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.31.0"
 rodio = { version = "0.19", default-features = true }
@@ -36,6 +36,8 @@ serde_json = "1.0"
 thiserror = "2.0"
 walkdir = "2.5"
 memmap2 = "0.9"
+fast_image_resize = { version = "6.0", features = ["image"] }
+
 
 [workspace.lints.clippy]
 all = "warn"
@@ -52,7 +54,7 @@ unsafe_code = "deny"
 opt-level = 3
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"

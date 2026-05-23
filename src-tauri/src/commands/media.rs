@@ -11,16 +11,14 @@ use parking_lot::Mutex;
 use std::num::NonZeroUsize;
 
 pub struct ImageLruCache {
-    cache: Mutex<LruCache<String, (image::DynamicImage, usize)>>,
-    current_bytes: Mutex<usize>,
+    inner: Mutex<(LruCache<String, (image::DynamicImage, usize)>, usize)>,
     max_bytes: usize,
 }
 
 impl ImageLruCache {
     pub fn new(max_bytes: usize) -> Self {
         Self {
-            cache: Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())),
-            current_bytes: Mutex::new(0),
+            inner: Mutex::new((LruCache::new(NonZeroUsize::new(1000).unwrap()), 0)),
             max_bytes,
         }
     }
@@ -30,8 +28,8 @@ impl ImageLruCache {
         // Estimate footprint: width * height * 4 channels (RGBA)
         let byte_size = (w as usize) * (h as usize) * 4;
         
-        let mut cache = self.cache.lock();
-        let mut current = self.current_bytes.lock();
+        let mut guard = self.inner.lock();
+        let (ref mut cache, ref mut current) = *guard;
         
         if let Some((_, old_size)) = cache.pop(&key) {
             *current = current.saturating_sub(old_size);
@@ -50,18 +48,20 @@ impl ImageLruCache {
     }
 
     pub fn get(&self, key: &str) -> Option<image::DynamicImage> {
-        let mut cache = self.cache.lock();
+        let mut guard = self.inner.lock();
+        let (ref mut cache, _) = *guard;
         cache.get(key).map(|(img, _)| img.clone())
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        let cache = self.cache.lock();
+        let mut guard = self.inner.lock();
+        let (ref mut cache, _) = *guard;
         cache.contains(key)
     }
 
     pub fn clear(&self) {
-        let mut cache = self.cache.lock();
-        let mut current = self.current_bytes.lock();
+        let mut guard = self.inner.lock();
+        let (ref mut cache, ref mut current) = *guard;
         cache.clear();
         *current = 0;
     }
@@ -95,7 +95,7 @@ pub async fn trigger_macos_sound(name: String, volume: Option<f64>) -> Result<()
         let vol_val = volume.unwrap_or(0.4) as f32;
         let path = std::path::PathBuf::from(sound_path);
         
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             if let Ok(file) = std::fs::File::open(&path) {
                 let reader = std::io::BufReader::new(file);
                 if let Ok((_stream, handle)) = rodio::OutputStream::try_default() {
@@ -117,9 +117,15 @@ pub async fn trigger_macos_sound(name: String, volume: Option<f64>) -> Result<()
 
 #[tauri::command]
 pub async fn get_thumbnail(path: String, max_side: u32, state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
+
     {
         let cache_key = (path.clone(), max_side);
-        if let Some(cached_path) = state.resolved_thumbs.read().get(&cache_key) {
+        let mut cache = state.resolved_thumbs.lock();
+        if let Some(cached_path) = cache.get(&cache_key) {
             return Ok(cached_path.clone());
         }
     }
@@ -131,7 +137,7 @@ pub async fn get_thumbnail(path: String, max_side: u32, state: State<'_, Arc<App
         let thumb_path = state_arc.cache.ensure_thumbnail(&path_buf, max_side).map_err(|e| e.to_string())?;
         let thumb_str = thumb_path.to_string_lossy().to_string();
         
-        state_arc.resolved_thumbs.write().insert((path_clone, max_side), thumb_str.clone());
+        state_arc.resolved_thumbs.lock().put((path_clone, max_side), thumb_str.clone());
         Ok::<String, String>(thumb_str)
     })
     .await
@@ -142,6 +148,10 @@ pub async fn get_thumbnail(path: String, max_side: u32, state: State<'_, Arc<App
 
 #[tauri::command]
 pub async fn get_full_image(path: String, state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let p = PathBuf::from(&path);
@@ -155,6 +165,9 @@ pub async fn get_full_image(path: String, state: State<'_, Arc<AppState>>) -> Re
 #[tauri::command]
 pub async fn prepare_edit_preview(path: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     let p = PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         if state_arc.preview_cache.contains_key(&path) {
@@ -183,7 +196,11 @@ pub async fn prepare_edit_preview(path: String, state: State<'_, Arc<AppState>>)
             };
 
             let mut img = media_core::open_image(&source).map_err(|e| e.to_string())?;
-            img = media_core::apply_exif_orientation(&img, &p);
+            let orientation = state_arc.index.read().as_ref()
+                .and_then(|idx| idx.items.iter().find(|it| it.path == p))
+                .map(|it| it.metadata.orientation)
+                .unwrap_or(1);
+            img = media_core::apply_orientation_value(img, orientation);
 
             let (w, h) = img.dimensions();
             let max_side = 1024;
@@ -206,6 +223,10 @@ pub async fn prepare_edit_preview(path: String, state: State<'_, Arc<AppState>>)
 
 #[tauri::command]
 pub async fn edit_image(path: String, edit: SimpleEdit, state: State<'_, Arc<AppState>>) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         state_arc.edits.write().insert(path.clone(), edit.clone());
@@ -223,12 +244,14 @@ pub async fn edit_image(path: String, edit: SimpleEdit, state: State<'_, Arc<App
 }
 
 fn copy_jpeg_exif(src_path: &Path, dest_path: &Path) -> Result<(), String> {
-    let src_bytes = std::fs::read(src_path).map_err(|e| e.to_string())?;
+    let src_file = std::fs::File::open(src_path).map_err(|e| e.to_string())?;
+    let src_mmap = unsafe { memmap2::Mmap::map(&src_file).map_err(|e| e.to_string())? };
+    let src_bytes = &src_mmap[..];
     let mut dest_bytes = std::fs::read(dest_path).map_err(|e| e.to_string())?;
     
     let mut src_app1 = None;
     let mut i = 2;
-    while i < src_bytes.len() - 1 {
+    while i + 1 < src_bytes.len() {
         if src_bytes[i] == 0xFF {
             let marker = src_bytes[i + 1];
             if marker == 0xD9 || marker == 0xDA {
@@ -240,7 +263,9 @@ fn copy_jpeg_exif(src_path: &Path, dest_path: &Path) -> Result<(), String> {
             let len = ((src_bytes[i + 2] as usize) << 8) | (src_bytes[i + 3] as usize);
             if marker == 0xE1 {
                 if i + 4 + 6 <= src_bytes.len() && &src_bytes[i + 4..i + 10] == b"Exif\0\0" {
-                    src_app1 = Some(&src_bytes[i..i + 2 + len]);
+                    if i + 2 + len <= src_bytes.len() {
+                        src_app1 = Some(&src_bytes[i..i + 2 + len]);
+                    }
                     break;
                 }
             }
@@ -253,7 +278,7 @@ fn copy_jpeg_exif(src_path: &Path, dest_path: &Path) -> Result<(), String> {
     if let Some(app1) = src_app1 {
         let mut insert_pos = 2;
         let mut dest_i = 2;
-        while dest_i < dest_bytes.len() - 1 {
+        while dest_i + 1 < dest_bytes.len() {
             if dest_bytes[dest_i] == 0xFF {
                 let marker = dest_bytes[dest_i + 1];
                 if marker == 0xD9 || marker == 0xDA {
@@ -265,8 +290,10 @@ fn copy_jpeg_exif(src_path: &Path, dest_path: &Path) -> Result<(), String> {
                 let len = ((dest_bytes[dest_i + 2] as usize) << 8) | (dest_bytes[dest_i + 3] as usize);
                 if marker == 0xE1 {
                     if dest_i + 4 + 6 <= dest_bytes.len() && &dest_bytes[dest_i + 4..dest_i + 10] == b"Exif\0\0" {
-                        dest_bytes.drain(dest_i..dest_i + 2 + len);
-                        insert_pos = dest_i;
+                        if dest_i + 2 + len <= dest_bytes.len() {
+                            dest_bytes.drain(dest_i..dest_i + 2 + len);
+                            insert_pos = dest_i;
+                        }
                         break;
                     }
                 }
@@ -288,20 +315,49 @@ pub async fn export_edited(
     dest: String,
     strip_metadata: bool,
     watermark: Option<Vec<u8>>,
+    watermark_anchor: Option<String>,
     state: State<'_, Arc<AppState>>
 ) -> Result<(), String> {
+    let src_p = PathBuf::from(&path);
+    if !crate::is_path_safe(&src_p, &state) {
+        return Err("Permission denied: source path lies outside safe sandbox boundaries".to_string());
+    }
+    let dest_p = PathBuf::from(&dest);
+    if let Some(dest_parent) = dest_p.parent() {
+        if !crate::is_path_safe(&dest_parent.to_path_buf(), &state) {
+            return Err("Permission denied: destination path lies outside safe sandbox boundaries".to_string());
+        }
+    } else {
+        return Err("Invalid destination path".to_string());
+    }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let edit = state_arc.edits.read().get(&path).cloned().unwrap_or_default();
         let p = PathBuf::from(&path);
         let mut img = media_core::open_image(&p).map_err(|e| e.to_string())?;
-        img = media_core::apply_exif_orientation(&img, &p);
+        let orientation = state_arc.index.read().as_ref()
+            .and_then(|idx| idx.items.iter().find(|it| it.path == p))
+            .map(|it| it.metadata.orientation)
+            .unwrap_or(1);
+        img = media_core::apply_orientation_value(img, orientation);
         let mut edited = apply_edit(&img, &edit);
         
         if let Some(wm_bytes) = watermark {
             if let Ok(wm_img) = image::load_from_memory(&wm_bytes) {
-                let x = edited.width().saturating_sub(wm_img.width() + 40);
-                let y = edited.height().saturating_sub(wm_img.height() + 40);
+                let margin = 40;
+                let anchor = watermark_anchor.as_deref().unwrap_or("bottom-right");
+                let x = match anchor {
+                    "bottom-left" | "top-left" => margin,
+                    "top-right" | "bottom-right" => edited.width().saturating_sub(wm_img.width() + margin),
+                    "center" => (edited.width().saturating_sub(wm_img.width())) / 2,
+                    _ => edited.width().saturating_sub(wm_img.width() + margin),
+                };
+                let y = match anchor {
+                    "top-left" | "top-right" => margin,
+                    "bottom-left" | "bottom-right" => edited.height().saturating_sub(wm_img.height() + margin),
+                    "center" => (edited.height().saturating_sub(wm_img.height())) / 2,
+                    _ => edited.height().saturating_sub(wm_img.height() + margin),
+                };
                 image::imageops::overlay(&mut edited, &wm_img, x as i64, y as i64);
             }
         }
@@ -324,14 +380,17 @@ pub async fn export_edited(
 
 #[tauri::command]
 pub async fn get_dominant_colors(path: String, state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    let p = std::path::PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
     {
-        let cache = state.dominant_colors.read();
+        let mut cache = state.dominant_colors.lock();
         if let Some(colors) = cache.get(&path) {
             return Ok(colors.clone());
         }
     }
     
-    let p = std::path::PathBuf::from(&path);
     if media_core::is_video_path(&p) {
         return Ok(vec![]);
     }
@@ -345,36 +404,121 @@ pub async fn get_dominant_colors(path: String, state: State<'_, Arc<AppState>>) 
     .await
     .map_err(|e| e.to_string())??;
     
-    state_arc.dominant_colors.write().insert(path_clone, colors.clone());
+    state_arc.dominant_colors.lock().put(path_clone, colors.clone());
     Ok(colors)
 }
 
 #[tauri::command]
-pub async fn find_visual_duplicates(paths: Vec<String>) -> Result<Vec<Vec<String>>, String> {
-    if paths.is_empty() { return Ok(Vec::new()); }
+pub async fn get_folder_dominant_colors(paths: Vec<String>, state: State<'_, Arc<AppState>>) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    for path in &paths {
+        let p = std::path::PathBuf::from(path);
+        if !crate::is_path_safe(&p, &state) {
+            return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+        }
+    }
+    let state_arc = state.inner().clone();
     
-    let result: Result<Vec<(String, u64)>, String> = tauri::async_runtime::spawn_blocking(move || {
-        let mut local_hashes = Vec::new();
-        for path_str in paths {
-            let path = std::path::Path::new(&path_str);
-            if !path.exists() { continue; }
-            if let Ok(img) = image::open(path) {
-                let gray = img.resize_exact(9, 8, image::imageops::FilterType::Nearest).to_luma8();
-                let mut dhash: u64 = 0;
-                let mut bit_idx = 0;
-                for y in 0..8 {
-                    for x in 0..8 {
-                        let p1 = gray.get_pixel(x, y)[0];
-                        let p2 = gray.get_pixel(x + 1, y)[0];
-                        if p2 > p1 {
-                            dhash |= 1 << bit_idx;
-                        }
-                        bit_idx += 1;
-                    }
+    // First grab what we have in cache
+    let mut results = std::collections::HashMap::new();
+    let mut missing_paths = Vec::new();
+    
+    {
+        let mut cache = state_arc.dominant_colors.lock();
+        for path in &paths {
+            if let Some(colors) = cache.get(path) {
+                results.insert(path.clone(), colors.clone());
+            } else {
+                let p = std::path::PathBuf::from(path);
+                if !media_core::is_video_path(&p) {
+                    missing_paths.push(path.clone());
+                } else {
+                    results.insert(path.clone(), vec![]);
                 }
-                local_hashes.push((path_str, dhash));
             }
         }
+    }
+    
+    if !missing_paths.is_empty() {
+        let extracted: Vec<(String, Vec<String>)> = tauri::async_runtime::spawn_blocking(move || {
+            use rayon::prelude::*;
+            missing_paths.into_par_iter().filter_map(|path_str| {
+                let p = std::path::PathBuf::from(&path_str);
+                if let Ok(img) = media_core::open_image(&p) {
+                    let colors = media_core::extract_dominant_colors(&img, 5);
+                    Some((path_str, colors))
+                } else {
+                    None
+                }
+            }).collect()
+        }).await.map_err(|e| e.to_string())?;
+        
+        let mut cache = state_arc.dominant_colors.lock();
+        for (path, colors) in extracted {
+            cache.put(path.clone(), colors.clone());
+            results.insert(path, colors);
+        }
+    }
+    
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn find_visual_duplicates(paths: Vec<String>, state: State<'_, Arc<AppState>>) -> Result<Vec<Vec<String>>, String> {
+    if paths.is_empty() { return Ok(Vec::new()); }
+    for path in &paths {
+        let p = std::path::PathBuf::from(path);
+        if !crate::is_path_safe(&p, &state) {
+            return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+        }
+    }
+    
+    let state_arc = state.inner().clone();
+    let result: Result<Vec<(String, u64)>, String> = tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let local_hashes: Vec<(String, u64)> = paths
+            .into_par_iter()
+            .filter_map(|path_str| {
+                let path = std::path::Path::new(&path_str);
+                if !path.exists() { return None; }
+                
+                // Try cached thumbnail first to prevent expensive full-resolution decodes
+                let img_res = if let Ok(thumb_path) = state_arc.cache.thumbnail_path(path, 320) {
+                    if thumb_path.exists() {
+                        image::open(&thumb_path)
+                    } else {
+                        let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                        if ["mp4", "mov", "webm", "avi", "mkv"].contains(&ext.as_str()) {
+                            Err(image::ImageError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Skip video thumb gen in hash")))
+                        } else if let Ok(gen_path) = state_arc.cache.ensure_thumbnail(path, 320) {
+                            image::open(&gen_path)
+                        } else {
+                            Err(image::ImageError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Failed thumb")))
+                        }
+                    }
+                } else {
+                    Err(image::ImageError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "No cache path")))
+                };
+                
+                if let Ok(img) = img_res {
+                    let gray = img.resize_exact(9, 8, image::imageops::FilterType::Nearest).to_luma8();
+                    let mut dhash: u64 = 0;
+                    let mut bit_idx = 0;
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let p1 = gray.get_pixel(x, y)[0];
+                            let p2 = gray.get_pixel(x + 1, y)[0];
+                            if p2 > p1 {
+                                dhash |= 1 << bit_idx;
+                            }
+                            bit_idx += 1;
+                        }
+                    }
+                    Some((path_str, dhash))
+                } else {
+                    None
+                }
+            })
+            .collect();
         Ok(local_hashes)
     }).await.unwrap_or(Err("Task failed".to_string()));
     
@@ -405,7 +549,7 @@ pub async fn find_visual_duplicates(paths: Vec<String>) -> Result<Vec<Vec<String
 }
 
 #[tauri::command]
-pub async fn batch_transcode(paths: Vec<String>, target_format: String) -> Result<String, String> {
+pub async fn batch_transcode(paths: Vec<String>, target_format: String, state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let target = target_format.to_lowercase();
     let fmt = match target.as_str() {
         "jpeg" | "jpg" => image::ImageFormat::Jpeg,
@@ -420,46 +564,51 @@ pub async fn batch_transcode(paths: Vec<String>, target_format: String) -> Resul
         return Ok("No files selected".to_string());
     }
     
+    for path_str in &paths {
+        let p = PathBuf::from(path_str);
+        if !crate::is_path_safe(&p, &state) {
+            return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+        }
+    }
+    
     let count = paths.len();
     
     let res = tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let results: Vec<Result<(), String>> = paths
+            .par_iter()
+            .map(|path_str| {
+                let path = std::path::Path::new(path_str);
+                if !path.exists() { return Err("File not found".to_string()); }
+                
+                let img = image::open(path).map_err(|e| e.to_string())?;
+                let parent = path.parent().unwrap_or(path);
+                let dir = parent.join("Transcoded");
+                let _ = std::fs::create_dir_all(&dir);
+                
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+                let ext = match fmt {
+                    image::ImageFormat::Jpeg => "jpg",
+                    image::ImageFormat::Png => "png",
+                    image::ImageFormat::WebP => "webp",
+                    image::ImageFormat::Tiff => "tiff",
+                    image::ImageFormat::Avif => "avif",
+                    _ => "dat",
+                };
+                let out_path = dir.join(format!("{}.{}", stem, ext));
+                
+                let img_rgba8 = image::DynamicImage::ImageRgba8(img.into_rgba8());
+                img_rgba8.save_with_format(&out_path, fmt).map_err(|e| e.to_string())
+            })
+            .collect();
+        
         let mut success = 0;
         let mut fails = 0;
         let mut last_err = String::new();
-        for path_str in paths {
-            let path = std::path::Path::new(&path_str);
-            if !path.exists() { fails += 1; continue; }
-            
-            match image::open(path) {
-                Ok(img) => {
-                    let parent = path.parent().unwrap_or(path);
-                    let dir = parent.join("Transcoded");
-                    let _ = std::fs::create_dir_all(&dir);
-                    
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-                    let ext = match fmt {
-                        image::ImageFormat::Jpeg => "jpg",
-                        image::ImageFormat::Png => "png",
-                        image::ImageFormat::WebP => "webp",
-                        image::ImageFormat::Tiff => "tiff",
-                        image::ImageFormat::Avif => "avif",
-                        _ => "dat",
-                    };
-                    let out_path = dir.join(format!("{}.{}", stem, ext));
-                    
-                    let img_rgba8 = image::DynamicImage::ImageRgba8(img.into_rgba8());
-                    
-                    if let Err(e) = img_rgba8.save_with_format(&out_path, fmt) {
-                        fails += 1;
-                        last_err = e.to_string();
-                    } else {
-                        success += 1;
-                    }
-                }
-                Err(e) => {
-                    fails += 1;
-                    last_err = e.to_string();
-                }
+        for result in results {
+            match result {
+                Ok(()) => success += 1,
+                Err(e) => { fails += 1; last_err = e; }
             }
         }
         (success, fails, last_err)
@@ -492,4 +641,59 @@ fn base64_encode(data: &[u8]) -> String {
         );
     }
     out
+}
+
+#[derive(serde::Serialize)]
+pub struct UiHistogram {
+    pub r: Vec<u32>,
+    pub g: Vec<u32>,
+    pub b: Vec<u32>,
+    pub lum: Vec<u32>,
+    pub peak: u32,
+}
+
+#[tauri::command]
+pub async fn get_visual_histogram(path: String, state: State<'_, Arc<AppState>>) -> Result<Option<UiHistogram>, String> {
+    let p = PathBuf::from(&path);
+    if !crate::is_path_safe(&p, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        match state_arc.cache.get_visual_histogram(&p) {
+            Ok(Some((r, g, b, lum))) => {
+                let peak = r.iter().chain(g.iter()).chain(b.iter()).chain(lum.iter()).cloned().max().unwrap_or(0);
+                Ok(Some(UiHistogram {
+                    r: r.to_vec(),
+                    g: g.to_vec(),
+                    b: b.to_vec(),
+                    lum: lum.to_vec(),
+                    peak,
+                }))
+            }
+            Ok(None) => {
+                // If it doesn't exist, try to compute it from the thumbnail if it exists
+                let max_side = 320;
+                let thumb_path = state_arc.cache.thumbnail_path(&p, max_side).unwrap_or_default();
+                if thumb_path.exists() {
+                    let _ = state_arc.cache.cache_visual_histogram(&p, &thumb_path);
+                    if let Ok(Some((r, g, b, lum))) = state_arc.cache.get_visual_histogram(&p) {
+                        let peak = r.iter().chain(g.iter()).chain(b.iter()).chain(lum.iter()).cloned().max().unwrap_or(0);
+                        return Ok(Some(UiHistogram {
+                            r: r.to_vec(),
+                            g: g.to_vec(),
+                            b: b.to_vec(),
+                            lum: lum.to_vec(),
+                            peak,
+                        }));
+                    }
+                }
+                Ok(None)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

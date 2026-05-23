@@ -9,6 +9,10 @@ pub async fn get_recent_folders(state: State<'_, Arc<AppState>>) -> Result<Vec<S
 
 #[tauri::command]
 pub async fn add_recent_folder(path: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() || !p.is_dir() {
+        return Err("The specified path does not exist or is not a directory".to_string());
+    }
     let mut recents = state.recent_folders.write();
     if let Some(pos) = recents.iter().position(|p| p == &path) {
         recents.remove(pos);
@@ -18,5 +22,7 @@ pub async fn add_recent_folder(path: String, state: State<'_, Arc<AppState>>) ->
         recents.pop();
     }
     crate::save_recent_folders(&recents);
+    drop(recents);
+    crate::rebuild_canonical_roots(&state);
     Ok(())
 }

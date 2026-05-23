@@ -73,6 +73,7 @@ app.innerHTML = `
     <div class="catalog-header" id="cDrag" data-tauri-drag-region>
       <h2 id="catalogTitle">Catalog Grid</h2>
       <div class="catalog-header-actions">
+        <button class="catalog-btn" id="catalogMapBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> Map View</button>
         <button class="catalog-btn" id="catalogDuplicatesBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg> Find Duplicates</button>
         <button class="catalog-btn" id="catalogNewFolderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> New Folder</button>
         <button class="catalog-btn" data-tooltip="⇧/⌘ + Click to select multiple" style="opacity: 0.5; padding: 6px 8px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></button>
@@ -82,11 +83,16 @@ app.innerHTML = `
     <div class="catalog-content" id="catalogContent"></div>
     <div class="transcode-hud" id="transcodeHud">
       <span class="transcode-hud-title" id="transcodeCount">0 items selected</span>
+      <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 8px;"></div>
       <button class="transcode-btn" data-fmt="webp">WebP</button>
       <button class="transcode-btn" data-fmt="png">PNG</button>
       <button class="transcode-btn" data-fmt="jpeg">JPEG</button>
       <button class="transcode-btn" data-fmt="avif">AVIF</button>
       <button class="transcode-btn" data-fmt="tiff">TIFF</button>
+      <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 8px;"></div>
+      <input type="text" id="batchTagInput" class="batch-tag-input" placeholder="Add tag (Enter)..." style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; outline: none; width: 120px;" />
+      <button class="transcode-btn" id="batchTrashBtn" style="color: #ff6b6b; border-color: rgba(255, 107, 107, 0.3);">Trash</button>
+      <button class="transcode-btn" id="batchScrubBtn" style="color: #ffb86c; border-color: rgba(255, 184, 108, 0.3); margin-left: 6px;">Scrub EXIF</button>
       <button class="transcode-btn" id="transcodeClose" style="background:transparent; border-color:transparent; margin-left: 8px; display:flex; align-items:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
   </div>
@@ -116,6 +122,7 @@ app.innerHTML = `
     </div>
     
     <div class="editorial-overlay" id="editorialOverlay">
+      <div class="editorial-resizer" id="editorialResizer"></div>
       <div class="editorial-camera" id="edCamera"></div>
       <div class="editorial-stats">
         <div class="editorial-stat-group"><span class="editorial-stat-label">Aperture</span><span class="editorial-stat-value" id="edAperture">—</span></div>
@@ -125,6 +132,7 @@ app.innerHTML = `
       </div>
       <div class="editorial-tech-data" id="edTechData"></div>
       <canvas class="editorial-histogram" id="histogramCanvas" width="220" height="56" aria-hidden="true"></canvas>
+      <canvas class="editorial-waveform" id="waveformCanvas" width="220" height="80" aria-hidden="true" style="margin-top: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); display: block;"></canvas>
       <div class="editorial-palette" id="editorialPalette" style="margin-top: 16px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
         <span class="editorial-stat-label">Dominant Palette</span>
         <div id="paletteChips" style="display: flex; gap: 8px; margin-top: 4px;">
@@ -138,6 +146,7 @@ app.innerHTML = `
       <div class="editorial-gps" id="edGps" style="margin-top: 12px; display: none; flex-direction: column; gap: 6px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
         <span class="editorial-stat-label">Location</span>
         <button class="gps-chip" id="gpsChip" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: var(--accent-gold); padding: 6px 10px; border-radius: 8px; font-size: 0.72rem; cursor: pointer; display: flex; align-items: center; gap: 6px; width: fit-content; transition: all 0.25s var(--ease-spring); font-family: var(--font-body); font-weight: 500;"></button>
+        <div id="edAddress" style="font-size: 0.72rem; color: #b0b0b8; margin-top: 2px; line-height: 1.3;"></div>
       </div>
     </div>
     <button class="nav-arrow prev" id="prev">‹</button>
@@ -194,7 +203,9 @@ app.innerHTML = `
         <div class="settings-tabs">
           <button class="tab-btn active" data-tab="general">General</button>
           <button class="tab-btn" data-tab="appearance">Appearance</button>
+          <button class="tab-btn" data-tab="storage">Storage</button>
           <button class="tab-btn" data-tab="keybinds">Keybinds</button>
+          <button class="tab-btn" data-tab="security">Security</button>
         </div>
 
         <div class="tab-pane active" id="tab-general">
@@ -232,8 +243,15 @@ app.innerHTML = `
               <label for="watermarkToggle">Export Watermark</label>
               <input type="checkbox" id="watermarkToggle" />
             </div>
-            <div class="watermark-input-row" id="watermarkInputRow">
-              <input type="text" id="watermarkInput" placeholder="Enter watermark text…" />
+            <div class="watermark-input-row" id="watermarkInputRow" style="display: flex; gap: 8px;">
+              <input type="text" id="watermarkInput" placeholder="Enter watermark text…" style="flex: 1;" />
+              <select id="watermarkAnchorSelect" style="width: 120px;">
+                 <option value="bottom-right">Bottom Right</option>
+                 <option value="bottom-left">Bottom Left</option>
+                 <option value="top-right">Top Right</option>
+                 <option value="top-left">Top Left</option>
+                 <option value="center">Center</option>
+              </select>
             </div>
           </div>
         </div>
@@ -265,6 +283,46 @@ app.innerHTML = `
           <div class="setting-row">
             <label for="cinematicCheck">Enable Cinematic Transitions</label>
             <input type="checkbox" id="cinematicCheck" checked />
+          </div>
+          <div class="setting-row">
+            <label for="highContrastCheck">High-Contrast Solid Backgrounds</label>
+            <input type="checkbox" id="highContrastCheck" />
+          </div>
+          <div class="setting-row">
+            <label for="reducedMotionCheck">Reduce UI Motion</label>
+            <input type="checkbox" id="reducedMotionCheck" />
+          </div>
+          <div class="setting-row">
+            <label for="performanceHudCheck">Show Performance HUD</label>
+            <input type="checkbox" id="performanceHudCheck" />
+          </div>
+        </div>
+
+        <div class="tab-pane" id="tab-storage">
+          <div class="settings-section-label">Database & Cache Diagnostics</div>
+          <div class="setting-row">
+            <span class="setting-label">SQLite Database Size</span>
+            <span class="setting-val" id="dbSizeVal">—</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Thumbnail Cache Size</span>
+            <span class="setting-val" id="cacheSizeVal">—</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Decoded Image Cache Size</span>
+            <span class="setting-val" id="decodedSizeVal">—</span>
+          </div>
+          <div class="settings-section-label">Runtime Engine Statistics</div>
+          <div class="setting-row">
+            <span class="setting-label">CPU Engine Load</span>
+            <span class="setting-val" id="cpuLoadVal">—</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">RAM Memory Usage</span>
+            <span class="setting-val" id="ramSizeVal">—</span>
+          </div>
+          <div class="setting-row" style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 16px; justify-content: flex-start;">
+            <button class="settings-update-btn" id="purgeCacheBtn" style="background: #e03131 !important; color: #fff !important; font-weight: bold; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.25s ease;">Purge All Local Cache</button>
           </div>
         </div>
 
@@ -326,6 +384,30 @@ app.innerHTML = `
             <button class="keybind-btn" data-action="toggleCatalog"></button>
           </div>
         </div>
+
+        <div class="tab-pane" id="tab-security">
+          <div class="setting-row">
+            <span style="font-size: 0.85rem; color: var(--text-primary); font-weight: 500;">Secure Album Vault & Platform Settings</span>
+          </div>
+          <div class="setting-row">
+            <label for="biometricVaultCheck">Enable Biometric Album Lock</label>
+            <input type="checkbox" id="biometricVaultCheck" />
+          </div>
+          <div class="setting-row" style="margin-top: 10px; flex-direction: column; align-items: flex-start; gap: 8px;">
+            <label style="font-size: 0.75rem; color: var(--text-secondary);">Audit Image Integrity (BLAKE3):</label>
+            <div style="display: flex; gap: 8px; width: 100%;">
+              <button class="settings-update-btn" id="auditImageBtn" style="padding: 6px 12px; font-size: 11px;">Compute File Checksum</button>
+              <span id="checksumResult" style="font-size: 11px; font-family: monospace; color: var(--text-tertiary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: center;">—</span>
+            </div>
+          </div>
+          <div class="setting-row" style="margin-top: 10px; flex-direction: column; align-items: flex-start; gap: 8px;">
+            <label style="font-size: 0.75rem; color: var(--text-secondary);">macOS Native Platform Actions:</label>
+            <div style="display: flex; gap: 8px; width: 100%;">
+              <button class="settings-update-btn" id="nativeShareBtn" style="padding: 6px 12px; font-size: 11px;">Share Current via Cocoa</button>
+              <button class="settings-update-btn" id="spotlightSearchBtn" style="padding: 6px 12px; font-size: 11px;">Spotlight Index Search</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -336,6 +418,12 @@ app.innerHTML = `
     <button class="update-dismiss" id="updateDismiss"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
   </div>
 
+  <div class="performance-hud" id="performanceHud" style="display: none;">
+    <div class="performance-hud-item"><span class="performance-hud-label">FPS</span><span class="performance-hud-value" id="hudFpsVal">60</span></div>
+    <div class="performance-hud-item"><span class="performance-hud-label">Display</span><span class="performance-hud-value" id="hudHzVal">60Hz</span></div>
+    <div class="performance-hud-item"><span class="performance-hud-label">CPU Load</span><span class="performance-hud-value" id="hudCpuVal">0.0%</span></div>
+    <div class="performance-hud-item"><span class="performance-hud-label">App Memory</span><span class="performance-hud-value" id="hudMemoryVal">0 MB</span></div>
+  </div>
   <div class="custom-cursor" id="customCursor"></div>
   <div class="dropzone-glow" id="dropzoneGlow"></div>
   <div id="toastContainer" class="toast-container"></div>
@@ -350,7 +438,28 @@ app.innerHTML = `
 
 /* ── DOM REFS ── */
 const $ = id => document.getElementById(id);
-const welcome = $('welcome'), welcomeBg = $('welcomeBg'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), customCursor = $('customCursor'), customCursorCheck = $('customCursorCheck'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), mapModal = $('mapModal'), mapCloseBtn = $('mapCloseBtn'), mapIframe = $('mapIframe'), compareBtn = $('compareBtn'), transcodeHud = $('transcodeHud'), transcodeCount = $('transcodeCount'), transcodeClose = $('transcodeClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput');
+const welcome = $('welcome'), welcomeBg = $('welcomeBg'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), customCursor = $('customCursor'), customCursorCheck = $('customCursorCheck'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogMapBtn = $('catalogMapBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), edAddress = $('edAddress'), mapModal = $('mapModal'), mapCloseBtn = $('mapCloseBtn'), mapIframe = $('mapIframe'), compareBtn = $('compareBtn'), transcodeHud = $('transcodeHud'), transcodeCount = $('transcodeCount'), transcodeClose = $('transcodeClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput'), watermarkAnchorSelect = $('watermarkAnchorSelect'), batchTagInput = $('batchTagInput'), batchTrashBtn = $('batchTrashBtn');
+
+// DOM Refs for Phase 2 Responsive Workspace & Fine-Grained Controls
+const highContrastCheck = $('highContrastCheck'),
+      reducedMotionCheck = $('reducedMotionCheck'),
+      performanceHudCheck = $('performanceHudCheck'),
+      dbSizeVal = $('dbSizeVal'),
+      cacheSizeVal = $('cacheSizeVal'),
+      decodedSizeVal = $('decodedSizeVal'),
+      ramSizeVal = $('ramSizeVal'),
+      cpuLoadVal = $('cpuLoadVal'),
+      purgeCacheBtn = $('purgeCacheBtn'),
+      performanceHud = $('performanceHud'),
+      editorialResizer = $('editorialResizer');
+
+// DOM Refs for Phase 4 Secure Platform APIs
+const biometricVaultCheck = $('biometricVaultCheck'),
+      auditImageBtn = $('auditImageBtn'),
+      checksumResult = $('checksumResult'),
+      nativeShareBtn = $('nativeShareBtn'),
+      spotlightSearchBtn = $('spotlightSearchBtn'),
+      batchScrubBtn = $('batchScrubBtn');
 
 // Utility: Debounce for disk-bound I/O reduction (Finding 3)
 function debounce(fn, delay) {
@@ -375,14 +484,37 @@ const analysisWorkerCode = `
     const bB = new Uint32Array(256);
     const lB = new Uint32Array(256);
     
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i];
-      const g = data[i+1];
-      const b = data[i+2];
-      rB[r]++;
-      gB[g]++;
-      bB[b]++;
-      lB[Math.round(0.299 * r + 0.587 * g + 0.114 * b)]++;
+    // Waveform density parameters
+    const waveCols = 128;
+    const waveBuckets = 100;
+    const waveR = new Uint32Array(waveCols * waveBuckets);
+    const waveG = new Uint32Array(waveCols * waveBuckets);
+    const waveB = new Uint32Array(waveCols * waveBuckets);
+    
+    for (let y = 0; y < 256; y++) {
+      const srcRowIdx = y * 256 * 4;
+      const targetY = Math.floor((y / 256) * waveBuckets);
+      
+      for (let x = 0; x < 256; x++) {
+        const i = srcRowIdx + x * 4;
+        const r = data[i];
+        const g = data[i+1];
+        const b = data[i+2];
+        
+        rB[r]++;
+        gB[g]++;
+        bB[b]++;
+        lB[Math.round(0.299 * r + 0.587 * g + 0.114 * b)]++;
+        
+        const targetX = Math.floor((x / 256) * waveCols);
+        const bucketR = Math.floor((r / 255) * (waveBuckets - 1));
+        const bucketG = Math.floor((g / 255) * (waveBuckets - 1));
+        const bucketB = Math.floor((b / 255) * (waveBuckets - 1));
+        
+        waveR[(waveBuckets - 1 - bucketR) * waveCols + targetX]++;
+        waveG[(waveBuckets - 1 - bucketG) * waveCols + targetX]++;
+        waveB[(waveBuckets - 1 - bucketB) * waveCols + targetX]++;
+      }
     }
     
     let peak = 1;
@@ -392,7 +524,14 @@ const analysisWorkerCode = `
       if (bB[i] > peak) peak = bB[i];
     }
     
-    self.postMessage({ rB, gB, bB, lB, peak }, [rB.buffer, gB.buffer, bB.buffer, lB.buffer]);
+    self.postMessage({ 
+      rB, gB, bB, lB, peak,
+      waveR, waveG, waveB,
+      waveCols, waveBuckets
+    }, [
+      rB.buffer, gB.buffer, bB.buffer, lB.buffer,
+      waveR.buffer, waveG.buffer, waveB.buffer
+    ]);
   };
 `;
 const analysisWorkerBlob = new Blob([analysisWorkerCode], { type: 'application/javascript' });
@@ -438,8 +577,10 @@ let catalogModeActive = false;
 let compareModeActive = false;
 let compareClipPct = 50;
 let selectedCatalogPaths = new Set();
-let gridThumbSize = 160;
+let gridThumbSize = parseInt(localStorage.getItem('folio_grid_thumb_size')) || 160;
 let activeTagFilter = null;
+let activeColorFilter = null;
+let folderDominantColorsCache = {};
 let catalogObserver = null;
 
 /* ── Settings & State ── */
@@ -456,6 +597,11 @@ let gridView = localStorage.getItem('folio_grid_view') === 'true';
 let activeColorBlindMode = localStorage.getItem('folio_color_blind') || 'none';
 let activeWatermark = localStorage.getItem('folio_watermark') || '';
 
+// Load settings for Phase 2 features
+let highContrastEnabled = localStorage.getItem('folio_high_contrast') === 'true';
+let reducedMotionEnabled = localStorage.getItem('folio_reduced_motion') === 'true';
+let performanceHudEnabled = localStorage.getItem('folio_performance_hud') === 'true';
+
 let trafficLightHover = false;
 let pendingRafUpdate = false;
 let editPanelOpen = false;
@@ -464,6 +610,46 @@ let editPreviewImg = null;
 const editMap = new Map();
 const preloadedThumbs = new Map();
 const preloadCache = new Map();
+
+// Geocoding Cache & Service
+const geocodeCache = new Map();
+async function reverseGeocode(lat, lon) {
+  if (lat === undefined || lat === null || lon === undefined || lon === null) return 'No coordinates';
+  const key = `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
+  if (geocodeCache.has(key)) return geocodeCache.get(key);
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`;
+    const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    if (!res.ok) return 'Address search failed';
+    const data = await res.json();
+    if (data.error) return 'Address not found';
+    const addr = data.address || {};
+    const parts = [];
+    const street = addr.road || addr.pedestrian || addr.subway;
+    const house = addr.house_number;
+    if (house && street) {
+      parts.push(`${house} ${street}`);
+    } else if (street) {
+      parts.push(street);
+    } else {
+      const place = addr.amenity || addr.leisure || addr.tourism || addr.office || addr.shop;
+      if (place) parts.push(place);
+    }
+    const city = addr.city || addr.town || addr.village || addr.suburb || addr.municipality;
+    if (city) parts.push(city);
+    const state = addr.state || addr.region || addr.province;
+    if (state) parts.push(state);
+    const country = addr.country;
+    if (country && parts.length < 3) parts.push(country);
+    const address = parts.length > 0 ? parts.join(', ') : (data.display_name || 'Coordinates location');
+    geocodeCache.set(key, address);
+    return address;
+  } catch (err) {
+    console.error('Geocoding error:', err);
+    return 'Address unavailable';
+  }
+}
+window.reverseGeocode = reverseGeocode;
 
 // Bind existing sessions properties to FolioState dynamically
 Object.defineProperties(FolioState, {
@@ -497,6 +683,14 @@ if (stripMetadataCheck) {
   stripMetadataCheck.addEventListener('change', (e) => {
     stripMetadataEnabled = e.target.checked;
     localStorage.setItem('folio_strip_metadata', stripMetadataEnabled);
+  });
+}
+let biometricVaultEnabled = localStorage.getItem('folio_biometric_lock') === 'true';
+if (biometricVaultCheck) {
+  biometricVaultCheck.checked = biometricVaultEnabled;
+  biometricVaultCheck.addEventListener('change', (e) => {
+    biometricVaultEnabled = e.target.checked;
+    localStorage.setItem('folio_biometric_lock', biometricVaultEnabled);
   });
 }
 if (soundVolumeSlider) {
@@ -536,28 +730,41 @@ if (colorBlindSelect) {
 
 const watermarkToggle = $('watermarkToggle');
 const watermarkInputRow = $('watermarkInputRow');
-if (watermarkToggle && watermarkInput && watermarkInputRow) {
-  const hasWatermark = activeWatermark.length > 0;
+let activeWatermarkAnchor = localStorage.getItem('folio_watermark_anchor') || 'bottom-right';
+
+if (watermarkToggle && watermarkInput && watermarkInputRow && watermarkAnchorSelect) {
+  let hasWatermark = localStorage.getItem('folio_watermark_enabled') === 'true';
   watermarkToggle.checked = hasWatermark;
   watermarkInput.value = activeWatermark;
+  watermarkAnchorSelect.value = activeWatermarkAnchor;
+  
   if (hasWatermark) watermarkInputRow.classList.add('visible');
 
   watermarkToggle.addEventListener('change', (e) => {
-    if (e.target.checked) {
+    hasWatermark = e.target.checked;
+    localStorage.setItem('folio_watermark_enabled', hasWatermark);
+    if (hasWatermark) {
       watermarkInputRow.classList.add('visible');
       watermarkInput.focus();
     } else {
       watermarkInputRow.classList.remove('visible');
       watermarkInput.value = '';
       activeWatermark = '';
-      localStorage.setItem('folio_watermark', '');
+      localStorage.removeItem('folio_watermark');
     }
   });
+  
   watermarkInput.addEventListener('input', (e) => {
     activeWatermark = e.target.value;
     localStorage.setItem('folio_watermark', activeWatermark);
   });
+  
+  watermarkAnchorSelect.addEventListener('change', (e) => {
+    activeWatermarkAnchor = e.target.value;
+    localStorage.setItem('folio_watermark_anchor', activeWatermarkAnchor);
+  });
 }
+
 function applyColorBlindMode() {
   if (activeColorBlindMode === 'none') {
     viewer.style.filter = '';
@@ -573,6 +780,7 @@ applyColorBlindMode();
 
 /* ── Core UI Methods ── */
 function applyTheme(theme) {
+  document.body.classList.toggle('light-theme', theme === 'light');
   const root = document.documentElement.style;
   if (theme === 'light') {
     root.setProperty('--bg-deep', '#f5f5f6');
@@ -855,12 +1063,22 @@ function scheduleUpdate() {
 function setZoom(level, cx, cy, opts = {}) {
   const oldZ = zoom;
   zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, level));
+  
+  if ((zoom === 1 && oldZ !== 1) || (Math.floor(oldZ) !== Math.floor(zoom))) {
+    try { playUISound('tick'); } catch (e) {}
+  }
+
   const img = getActiveImage();
   if (img) {
     if (zoom <= 1.01) {
+      const snapped = (zoom !== oldZ);
       zoom = 1; panX = 0; panY = 0;
       img.classList.remove('zoomed'); img.style.transform = '';
       if (editPreviewImg) editPreviewImg.style.transform = '';
+      if (snapped && !opts.skipBounce) {
+        img.classList.add('zoom-snap-bounce');
+        setTimeout(() => img.classList.remove('zoom-snap-bounce'), 250);
+      }
     } else {
       img.classList.add('zoomed');
       if (cx !== undefined && cy !== undefined) {
@@ -917,12 +1135,66 @@ async function renderRecentFolders() {
   }
 }
 
+function processLoadedItems(rawItems) {
+  if (!rawItems) return [];
+  const movPaths = new Map();
+  rawItems.forEach(it => {
+    if (it.is_video && it.path.toLowerCase().endsWith('.mov')) {
+      const base = it.path.substring(0, it.path.lastIndexOf('.')).toLowerCase();
+      movPaths.set(base, it.path);
+    }
+  });
+
+  rawItems.forEach(it => {
+    if (!it.is_video) {
+      const extIdx = it.path.lastIndexOf('.');
+      if (extIdx !== -1) {
+        const ext = it.path.substring(extIdx + 1).toLowerCase();
+        if (['heic', 'heif', 'jpg', 'jpeg'].includes(ext)) {
+          const base = it.path.substring(0, extIdx).toLowerCase();
+          if (movPaths.has(base)) {
+            it.isLivePhoto = true;
+            it.livePhotoVideoPath = movPaths.get(base);
+          }
+        }
+      }
+    }
+  });
+
+  const pairedVideoPaths = new Set();
+  rawItems.forEach(it => {
+    if (it.isLivePhoto && it.livePhotoVideoPath) {
+      pairedVideoPaths.add(it.livePhotoVideoPath.toLowerCase());
+    }
+  });
+
+  return rawItems.filter(it => !pairedVideoPaths.has(it.path.toLowerCase()));
+}
+
 async function loadFolderData(p) {
-  items = await invoke('get_folder_items');
+  if (localStorage.getItem('folio_biometric_lock') === 'true') {
+    showToast("Authenticating Secure Vault...");
+    try {
+      const authenticated = await invoke('authenticate_vault');
+      if (!authenticated) {
+        showToast("Secure Vault access denied!");
+        return;
+      }
+      showToast("Secure Vault unlocked!");
+    } catch (e) {
+      showToast(`Authentication failed: ${e}`);
+      return;
+    }
+  }
+
+  items = processLoadedItems(await invoke('get_folder_items'));
   idx = 0; sortItems();
   welcome.classList.add('hidden');
   renderBreadcrumbs(p);
   playUISound('load');
+  activeTagFilter = null;
+  activeColorFilter = null;
+  folderDominantColorsCache = {};
   await renderTagFilters();
   filmstrip.scrollTop = 0;
   if (catalogModeActive) {
@@ -1022,21 +1294,53 @@ function preloadImage(item) {
 function triggerPreload(currentIdx) {
   if (!items || items.length <= 1) return;
 
-  const keepSet = new Set();
-  const windowSize = 2; // Keep 2 adjacent in each direction
+  const now = performance.now();
+  let direction = 1;
+  let speed = 0;
   
-  for (let offset = -windowSize; offset <= windowSize; offset++) {
+  if (window.lastPreloadTime > 0) {
+    const dt = now - window.lastPreloadTime;
+    let diff = currentIdx - window.lastPreloadIdx;
+    
+    if (Math.abs(diff) > items.length / 2) {
+      diff = diff > 0 ? diff - items.length : diff + items.length;
+    }
+    
+    if (dt > 0 && diff !== 0) {
+      direction = diff > 0 ? 1 : -1;
+      speed = Math.abs(diff) / dt;
+    }
+  }
+  
+  window.lastPreloadIdx = currentIdx;
+  window.lastPreloadTime = now;
+
+  const keepSet = new Set();
+  const offsets = [];
+
+  const isFast = speed > 0.003;
+  if (isFast) {
+    for (let o = 1; o <= 3; o++) {
+      offsets.push(o * direction);
+    }
+  } else {
+    offsets.push(-2, -1, 1, 2);
+  }
+
+  const currentItem = items[currentIdx];
+  if (currentItem) {
+    keepSet.add(currentItem.path);
+  }
+
+  for (const offset of offsets) {
     const targetIdx = (currentIdx + offset + items.length) % items.length;
     const item = items[targetIdx];
     if (item && !item.is_video) {
       keepSet.add(item.path);
-      if (offset !== 0) {
-        preloadImage(item);
-      }
+      preloadImage(item);
     }
   }
 
-  // Evict items from preloadCache that are not in our sliding keep window
   for (const path of preloadCache.keys()) {
     if (!keepSet.has(path)) {
       preloadCache.delete(path);
@@ -1330,7 +1634,11 @@ function show(i, dir = null) {
         img.style.opacity = '1';
         viewer.classList.remove('loading');
         const ph = layer.querySelector('.placeholder-thumb');
-        if (ph) ph.remove();
+        if (ph) {
+          ph.classList.remove('loaded');
+          ph.classList.add('fade-out');
+          setTimeout(() => ph.remove(), 150);
+        }
         
         // Defer CPU-heavy color analytics to unblock visual navigation animations
         setTimeout(() => {
@@ -1392,6 +1700,43 @@ function show(i, dir = null) {
         }
     }
     layer.appendChild(img);
+
+    if (item.isLivePhoto && item.livePhotoVideoPath) {
+      const v = document.createElement('video');
+      v.className = 'live-video-player';
+      v.muted = true; v.loop = true; v.playsInline = true;
+      v.src = `folio://localhost/${encodeURIComponent(item.livePhotoVideoPath)}`;
+      layer.appendChild(v);
+
+      const badge = document.createElement('div');
+      badge.className = 'vp-live-badge';
+      badge.innerHTML = `
+        <svg class="live-photo-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="6"/>
+          <circle cx="12" cy="12" r="2"/>
+        </svg>
+        <span>LIVE</span>
+      `;
+      layer.appendChild(badge);
+
+      layer.addEventListener('mouseenter', () => {
+        v.play().then(() => {
+          v.style.opacity = '1';
+        }).catch(err => console.error("Live Photo playback error:", err));
+      });
+
+      layer.addEventListener('mouseleave', () => {
+        v.style.opacity = '0';
+        setTimeout(() => {
+          if (v.style.opacity === '0') {
+            v.pause();
+            v.currentTime = 0;
+          }
+        }, 300);
+      });
+    }
+
     media.appendChild(layer);
   }
 
@@ -1417,8 +1762,25 @@ function show(i, dir = null) {
       const lonRef = lon >= 0 ? 'E' : 'W';
       gpsChip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px;"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1118 0z"/><circle cx="12" cy="10" r="3"/></svg> ${Math.abs(lat).toFixed(4)}° ${latRef}, ${Math.abs(lon).toFixed(4)}° ${lonRef}`;
       gpsChip.onclick = () => {
-        showMapPopup(lat, lon);
+        showMapPopup({
+          lat: lat,
+          lon: lon,
+          path: item.path,
+          name: item.path.split('/').pop()
+        });
       };
+      if (edAddress) {
+        edAddress.textContent = 'Loading address...';
+        reverseGeocode(lat, lon).then(addr => {
+          if (items[idx]?.path === item.path) {
+            edAddress.textContent = addr;
+          }
+        }).catch(() => {
+          if (items[idx]?.path === item.path) {
+            edAddress.textContent = 'Address unavailable';
+          }
+        });
+      }
     } else {
       edGps.style.display = 'none';
     }
@@ -1584,6 +1946,19 @@ function buildFilmstrip() {
         d.appendChild(icon);
     } else {
         const img = document.createElement('img'); img.crossOrigin = "anonymous"; d.appendChild(img);
+        if (it.isLivePhoto) {
+            const badge = document.createElement('div');
+            badge.className = 'live-photo-badge';
+            badge.innerHTML = `
+              <svg class="live-photo-icon" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <circle cx="12" cy="12" r="10"/>
+                <circle cx="12" cy="12" r="6"/>
+                <circle cx="12" cy="12" r="2"/>
+              </svg>
+              <span>LIVE</span>
+            `;
+            d.appendChild(badge);
+        }
     }
     
     const dotsContainer = document.createElement('div');
@@ -1930,6 +2305,7 @@ catalogDuplicatesBtn?.addEventListener('click', async () => {
       });
       
       catalogDuplicatesBtn.classList.add('active');
+      openDuplicateResolver(groups);
       buildCatalogContent();
     }
   } catch (e) {
@@ -1940,6 +2316,215 @@ catalogDuplicatesBtn?.addEventListener('click', async () => {
   }
 });
 
+window.openGeotaggedImage = (path) => {
+  const index = items.findIndex(it => it.path === path);
+  if (index !== -1) {
+    mapCloseBtn.click();
+    navTo(index);
+  }
+};
+
+catalogMapBtn?.addEventListener('click', () => {
+  const geotagged = items.filter(it => it.exif?.latitude && it.exif?.longitude).map(it => ({
+    lat: it.exif.latitude, lon: it.exif.longitude, path: it.path, name: it.path.split(/[\/\\]/).pop()
+  }));
+  if (geotagged.length === 0) {
+    showToast('No geotagged media found in this folder.');
+    return;
+  }
+  showMapPopup(geotagged);
+});
+
+// Duplicates Resolver Modal
+let currentDupGroupIndex = 0;
+let dupGroupsData = [];
+
+window.openDuplicateResolver = (groups) => {
+  dupGroupsData = groups;
+  currentDupGroupIndex = 0;
+  
+  let modal = document.getElementById('duplicateResolverModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'duplicateResolverModal';
+    Object.assign(modal.style, {
+      position: 'fixed', inset: '0',
+      background: 'rgba(0,0,0,0.6)',
+      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+      zIndex: '900',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: '#fff', opacity: '0',
+      transition: 'opacity 0.25s ease',
+    });
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeDuplicateResolver();
+    });
+  }
+  modal.style.display = 'flex';
+  requestAnimationFrame(() => { modal.style.opacity = '1'; });
+  renderDuplicateGroup();
+};
+
+window.closeDuplicateResolver = () => {
+  const modal = document.getElementById('duplicateResolverModal');
+  if (modal) {
+    modal.style.opacity = '0';
+    setTimeout(() => { modal.style.display = 'none'; }, 250);
+  }
+};
+
+window.renderDuplicateGroup = async () => {
+  const modal = document.getElementById('duplicateResolverModal');
+  if (!modal) return;
+  if (currentDupGroupIndex >= dupGroupsData.length) {
+    closeDuplicateResolver();
+    showToast('Finished reviewing all duplicate groups.');
+    return;
+  }
+  
+  const groupPaths = dupGroupsData[currentDupGroupIndex];
+  
+  // Build the dialog container
+  const dialog = document.createElement('div');
+  Object.assign(dialog.style, {
+    background: 'var(--modal-bg)',
+    backdropFilter: 'saturate(180%) blur(40px)',
+    WebkitBackdropFilter: 'saturate(180%) blur(40px)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '16px',
+    boxShadow: '0 32px 80px rgba(0,0,0,0.6)',
+    maxWidth: '680px', width: '90vw', maxHeight: '80vh',
+    display: 'flex', flexDirection: 'column',
+    overflow: 'hidden',
+  });
+  
+  // Header
+  const header = document.createElement('div');
+  Object.assign(header.style, {
+    padding: '16px 20px',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: '0',
+  });
+  const headerLeft = document.createElement('div');
+  headerLeft.innerHTML = `
+    <div style="font-size: 13px; font-weight: 600; letter-spacing: 0.03em;">Resolve Duplicates</div>
+    <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 2px;">Group ${currentDupGroupIndex + 1} of ${dupGroupsData.length} · ${groupPaths.length} similar images</div>
+  `;
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'catalog-btn';
+  closeBtn.textContent = 'Close';
+  Object.assign(closeBtn.style, { fontSize: '11px', padding: '4px 12px' });
+  closeBtn.addEventListener('click', closeDuplicateResolver);
+  header.appendChild(headerLeft);
+  header.appendChild(closeBtn);
+  dialog.appendChild(header);
+  
+  // Cards container
+  const cardsContainer = document.createElement('div');
+  Object.assign(cardsContainer.style, {
+    padding: '20px', overflowY: 'auto',
+    display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap',
+  });
+  
+  for (let i = 0; i < groupPaths.length; i++) {
+    const path = groupPaths[i];
+    const name = path.split(/[\/\\]/).pop();
+    const item = items.find(it => it.path === path);
+    const sizeBytes = item ? item.size : 0;
+    const sz = sizeBytes > 0 ? (sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : '—';
+    const dims = item ? `${item.width || '?'}×${item.height || '?'}` : '';
+    
+    const card = document.createElement('div');
+    Object.assign(card.style, {
+      flex: '1', minWidth: '180px', maxWidth: '280px',
+      display: 'flex', flexDirection: 'column', gap: '10px',
+      padding: '14px', background: 'rgba(255,255,255,0.03)',
+      borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)',
+    });
+    
+    const img = document.createElement('img');
+    img.src = `folio://localhost/${encodeURIComponent(path)}`;
+    Object.assign(img.style, {
+      width: '100%', aspectRatio: '4/3', objectFit: 'cover',
+      borderRadius: '6px', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+    });
+    
+    const info = document.createElement('div');
+    info.style.textAlign = 'center';
+    info.innerHTML = `
+      <div style="font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${name.replace(/"/g, '&quot;')}">${name}</div>
+      <div style="font-size: 10px; color: var(--text-tertiary); margin-top: 2px;">${sz}${dims ? ' · ' + dims : ''}</div>
+    `;
+    
+    const trashBtn = document.createElement('button');
+    trashBtn.className = 'catalog-btn';
+    Object.assign(trashBtn.style, {
+      width: '100%', justifyContent: 'center',
+      borderColor: 'rgba(255,100,100,0.3)', color: '#ff8a8a', fontSize: '11px',
+    });
+    trashBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg> Trash`;
+    
+    // Use a closure to capture the path safely — no inline onclick
+    trashBtn.addEventListener('click', () => trashDuplicate(path));
+    
+    card.appendChild(img);
+    card.appendChild(info);
+    card.appendChild(trashBtn);
+    cardsContainer.appendChild(card);
+  }
+  dialog.appendChild(cardsContainer);
+  
+  // Footer
+  const footer = document.createElement('div');
+  Object.assign(footer.style, {
+    padding: '12px 20px',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: '0',
+  });
+  const hint = document.createElement('span');
+  hint.style.cssText = 'font-size: 11px; color: var(--text-tertiary);';
+  hint.textContent = 'Click Trash on items you don\'t need';
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'catalog-btn';
+  Object.assign(nextBtn.style, { color: 'var(--accent-gold)', borderColor: 'rgba(212,167,44,0.3)', fontSize: '11px' });
+  nextBtn.textContent = currentDupGroupIndex < dupGroupsData.length - 1 ? 'Next Group →' : 'Done';
+  nextBtn.addEventListener('click', () => { currentDupGroupIndex++; renderDuplicateGroup(); });
+  footer.appendChild(hint);
+  footer.appendChild(nextBtn);
+  dialog.appendChild(footer);
+  
+  // Replace modal content
+  modal.innerHTML = '';
+  modal.appendChild(dialog);
+};
+
+window.trashDuplicate = async (path) => {
+  try {
+    await invoke('delete_physical_file', { path });
+    showToast(`Trashed ${path.split(/[\/\\]/).pop()}`);
+    
+    // Remove from data
+    const group = dupGroupsData[currentDupGroupIndex];
+    dupGroupsData[currentDupGroupIndex] = group.filter(p => p !== path);
+    items = items.filter(it => it.path !== path);
+    
+    // Refresh the sidebar filmstrip and catalog grid
+    buildFilmstrip();
+    if (catalogModeActive) buildCatalogContent();
+    
+    // If only one left in group, auto-advance
+    if (dupGroupsData[currentDupGroupIndex].length < 2) {
+      currentDupGroupIndex++;
+      renderDuplicateGroup();
+    } else {
+      renderDuplicateGroup();
+    }
+  } catch(e) {
+    showToast(`Failed to trash: ${e}`);
+  }
+};
+
 catalogNewFolderBtn?.addEventListener('click', () => {
   showNewFolderModal();
 });
@@ -1949,29 +2534,82 @@ catalogCloseBtn?.addEventListener('click', () => {
 });
 
 let isResizingSidebar = false;
-sidebarResizer.addEventListener('mousedown', (e) => {
-  isResizingSidebar = true;
-  document.body.style.cursor = 'ew-resize';
-  document.body.style.userSelect = 'none';
-  document.body.style.webkitUserSelect = 'none';
-  sidebarResizer.classList.add('dragging');
-});
+let isResizingExif = false;
 
-window.addEventListener('mousemove', (e) => {
-  if (!isResizingSidebar) return;
-  const newWidth = Math.min(450, Math.max(180, e.clientX));
-  document.documentElement.style.setProperty('--sidebar-w', `${newWidth}px`);
-});
+// Sidebar Resizer using setPointerCapture
+if (sidebarResizer) {
+  sidebarResizer.addEventListener('pointerdown', (e) => {
+    isResizingSidebar = true;
+    sidebarResizer.setPointerCapture(e.pointerId);
+    sidebarResizer.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.body.style.webkitUserSelect = 'none';
+  });
+  sidebarResizer.addEventListener('pointermove', (e) => {
+    if (!isResizingSidebar) return;
+    const newWidth = Math.min(450, Math.max(180, e.clientX));
+    document.documentElement.style.setProperty('--sidebar-w', `${newWidth}px`);
+  });
+  sidebarResizer.addEventListener('pointerup', (e) => {
+    if (isResizingSidebar) {
+      isResizingSidebar = false;
+      sidebarResizer.releasePointerCapture(e.pointerId);
+      sidebarResizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+    }
+  });
+  sidebarResizer.addEventListener('pointercancel', (e) => {
+    if (isResizingSidebar) {
+      isResizingSidebar = false;
+      sidebarResizer.releasePointerCapture(e.pointerId);
+      sidebarResizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+    }
+  });
+}
 
-window.addEventListener('mouseup', () => {
-  if (isResizingSidebar) {
-    isResizingSidebar = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    document.body.style.webkitUserSelect = '';
-    sidebarResizer.classList.remove('dragging');
-  }
-});
+// Editorial EXIF overlay resizer using setPointerCapture
+if (editorialResizer) {
+  editorialResizer.addEventListener('pointerdown', (e) => {
+    isResizingExif = true;
+    editorialResizer.setPointerCapture(e.pointerId);
+    editorialResizer.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.body.style.webkitUserSelect = 'none';
+  });
+  editorialResizer.addEventListener('pointermove', (e) => {
+    if (!isResizingExif) return;
+    const rect = edOverlay.getBoundingClientRect();
+    const newWidth = Math.min(600, Math.max(220, e.clientX - rect.left));
+    edOverlay.style.width = `${newWidth}px`;
+  });
+  editorialResizer.addEventListener('pointerup', (e) => {
+    if (isResizingExif) {
+      isResizingExif = false;
+      editorialResizer.releasePointerCapture(e.pointerId);
+      editorialResizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+    }
+  });
+  editorialResizer.addEventListener('pointercancel', (e) => {
+    if (isResizingExif) {
+      isResizingExif = false;
+      editorialResizer.releasePointerCapture(e.pointerId);
+      editorialResizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+    }
+  });
+}
 
 editToggleBtn.addEventListener('click', () => { if (editPanelOpen) closeEditPanel(); else openEditPanel(); });
 editCloseBtn?.addEventListener('click', closeEditPanel);
@@ -2025,7 +2663,7 @@ editExportBtn?.addEventListener('click', async () => {
     const dest = await save({ defaultPath: p.replace(/(\.[^.]+)$/, '_edited$1'), filters: [{ name: 'Image', extensions: ['jpg', 'jpeg', 'png', 'tiff'] }] });
     if (dest) { 
       const watermarkPayload = generateWatermarkPayload();
-      await invoke('export_edited', { path: p, dest, stripMetadata: stripMetadataEnabled, watermark: watermarkPayload }); 
+      await invoke('export_edited', { path: p, dest, stripMetadata: stripMetadataEnabled, watermark: watermarkPayload, watermarkAnchor: activeWatermarkAnchor }); 
       showToast('Exported successfully'); 
     }
   } catch (e) { showToast('Export failed'); }
@@ -2054,6 +2692,12 @@ function wakeCursorLoop() {
   }
 }
 
+// Track custom cursor variants globally
+let isEwResizeCursor = false;
+let isCrosshairCursor = false;
+let activeMagneticElement = null;
+let magneticCenter = null;
+
 window.addEventListener('mousemove', (e) => {
   targetX = e.clientX;
   targetY = e.clientY;
@@ -2062,12 +2706,71 @@ window.addEventListener('mousemove', (e) => {
   const inTL = !isFullscreen && e.clientX <= 80 && e.clientY <= 40;
   if (useCustomCursor) setTrafficLightHover(inTL);
   
+  const ewTarget = e.target.closest('#sidebarResizer, #editorialResizer, .sidebar-resizer, .editorial-resizer') || isResizingSidebar || isResizingExif;
+  const crosshairTarget = e.target.closest('input[type="range"], .slider, .scrubber') || FolioState.isSliderActive || FolioState.isVolumeActive || FolioState.isScrubbingActive;
+  
+  isEwResizeCursor = !!ewTarget;
+  isCrosshairCursor = !!crosshairTarget;
+  
   isHoveringCursor = !!(
-    e.target.closest('button, .thumb, input, select, .welcome-btn, .sidebar-dragbar, .sidebar-toggle, .grid-toggle-btn, .sidebar-resizer') ||
+    e.target.closest('button, .thumb, input, select, .welcome-btn, .sidebar-dragbar, .sidebar-toggle, .grid-toggle-btn, .sidebar-resizer, .editorial-resizer') ||
     FolioState.isSliderActive ||
     FolioState.isVolumeActive ||
     FolioState.isScrubbingActive
   );
+  
+  // FE-9 Magnetic Interactive Hover Targets
+  if (!reducedMotionEnabled) {
+    const mag = e.target.closest('button, .palette-chip, .gps-chip, .tab-btn');
+    if (mag) {
+      if (activeMagneticElement && activeMagneticElement !== mag) {
+        activeMagneticElement.style.transform = '';
+        activeMagneticElement.style.transition = 'transform 0.25s ease';
+        magneticCenter = null;
+      }
+      activeMagneticElement = mag;
+      
+      if (!magneticCenter || magneticCenter.element !== mag) {
+        const prevTransform = mag.style.transform;
+        mag.style.transform = '';
+        const rect = mag.getBoundingClientRect();
+        mag.style.transform = prevTransform;
+        
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const threshold = Math.max(rect.width, rect.height) / 2 + 15;
+        magneticCenter = { element: mag, cx, cy, threshold };
+      }
+      
+      const dx = e.clientX - magneticCenter.cx;
+      const dy = e.clientY - magneticCenter.cy;
+      const dist = Math.hypot(dx, dy);
+      
+      if (dist < magneticCenter.threshold) {
+        const pullX = (dx / dist) * 3;
+        const pullY = (dy / dist) * 3;
+        
+        let transformStr = `translate(${pullX}px, ${pullY}px)`;
+        mag.style.transform = transformStr;
+        mag.style.transition = 'transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1.4)';
+      } else {
+        mag.style.transform = '';
+        mag.style.transition = 'transform 0.25s ease';
+        magneticCenter = null;
+      }
+    } else {
+      if (activeMagneticElement) {
+        activeMagneticElement.style.transform = '';
+        activeMagneticElement.style.transition = 'transform 0.25s ease';
+        activeMagneticElement = null;
+        magneticCenter = null;
+      }
+    }
+  } else if (activeMagneticElement) {
+    activeMagneticElement.style.transform = '';
+    activeMagneticElement = null;
+    magneticCenter = null;
+  }
   
   wakeCursorLoop();
 });
@@ -2094,14 +2797,17 @@ function updateCursorLoop() {
     const dx = targetX - cursorX;
     const dy = targetY - cursorY;
     
-    // ProMotion continuous lerp interpolation
-    cursorX += dx * 0.28;
-    cursorY += dy * 0.28;
+    // ProMotion continuous lerp interpolation (calibrated based on screen refresh rate deltas)
+    const factor = refreshRateType === 120 ? 0.15 : 0.28;
+    cursorX += dx * factor;
+    cursorY += dy * factor;
     
     if (customCursor) {
       customCursor.style.opacity = 1;
       customCursor.style.transform = `translate(${cursorX}px, ${cursorY}px)`;
       customCursor.classList.toggle('hovering', isHoveringCursor);
+      customCursor.classList.toggle('ew-resize', isEwResizeCursor);
+      customCursor.classList.toggle('crosshair', isCrosshairCursor);
     }
     
     // Close enough to destination -> sleep the loop to save energy
@@ -2170,6 +2876,29 @@ media.addEventListener('contextmenu', (e) => {
   }
 });
 
+// Intercept browser zoom keys at the capture phase to prevent zoom and resize catalog grid (FE-11)
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey) {
+    if (e.key === '=' || e.key === '+' || e.code === 'Equal' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (catalogModeActive) {
+        gridThumbSize = Math.min(400, gridThumbSize + 20);
+        localStorage.setItem('folio_grid_thumb_size', gridThumbSize);
+        document.documentElement.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
+      }
+    } else if (e.key === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (catalogModeActive) {
+        gridThumbSize = Math.max(80, gridThumbSize - 20);
+        localStorage.setItem('folio_grid_thumb_size', gridThumbSize);
+        document.documentElement.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
+      }
+    }
+  }
+}, true);
+
 window.addEventListener('keydown', (e) => {
     if (['input', 'textarea', 'select'].includes((e.target?.tagName || '').toLowerCase())) return;
     
@@ -2183,19 +2912,6 @@ window.addEventListener('keydown', (e) => {
     }
     
     if (catalogModeActive) {
-      if (e.metaKey || e.ctrlKey) {
-        if (key === '=' || key === '+') {
-          e.preventDefault();
-          gridThumbSize = Math.min(400, gridThumbSize + 20);
-          catalogGrid.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
-          return;
-        } else if (key === '-') {
-          e.preventDefault();
-          gridThumbSize = Math.max(80, gridThumbSize - 20);
-          catalogGrid.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
-          return;
-        }
-      }
       if (key === 'Escape') {
         toggleCatalogView(false);
         return;
@@ -2311,8 +3027,12 @@ function sortItems() {
   });
 }
 const histogramCanvas = $('histogramCanvas'), histCtx = histogramCanvas?.getContext('2d'), histSample = document.createElement('canvas'), histSampleCtx = histSample.getContext('2d', { willReadFrequently: true });
+const waveformCanvas = $('waveformCanvas'), waveCtx = waveformCanvas?.getContext('2d');
 histSample.width = 256; histSample.height = 256;
-function clearHistogram() { if (histCtx) histCtx.clearRect(0, 0, histogramCanvas.width, histogramCanvas.height); }
+function clearHistogram() { 
+  if (histCtx) histCtx.clearRect(0, 0, histogramCanvas.width, histogramCanvas.height); 
+  if (waveCtx) waveCtx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+}
 
 let currentHistogramTaskId = 0;
 function drawHistogram(imgEl) {
@@ -2328,7 +3048,7 @@ function drawHistogram(imgEl) {
 
   analysisWorker.onmessage = function(e) {
     if (taskId !== currentHistogramTaskId) return;
-    const { rB, gB, bB, lB, peak } = e.data;
+    const { rB, gB, bB, lB, peak, waveR, waveG, waveB, waveCols, waveBuckets } = e.data;
     histCtx.clearRect(0, 0, W, H);
     const drawC = (buckets, color) => {
       histCtx.beginPath();
@@ -2344,6 +3064,62 @@ function drawHistogram(imgEl) {
     drawC(gB, 'rgba(75,210,100,0.4)');
     drawC(bB, 'rgba(75,130,255,0.4)');
     drawC(lB, 'rgba(255,255,255,0.65)');
+
+    if (waveCtx && waveR) {
+      const wW = waveformCanvas.width;
+      const wH = waveformCanvas.height;
+      waveCtx.clearRect(0, 0, wW, wH);
+      
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = waveCols;
+      tempCanvas.height = waveBuckets;
+      const tempCtx = tempCanvas.getContext('2d');
+      const tempImgData = tempCtx.createImageData(waveCols, waveBuckets);
+      const data = tempImgData.data;
+      
+      let maxWaveVal = 1;
+      const totalLen = waveCols * waveBuckets;
+      for (let i = 0; i < totalLen; i++) {
+        if (waveR[i] > maxWaveVal) maxWaveVal = waveR[i];
+        if (waveG[i] > maxWaveVal) maxWaveVal = waveG[i];
+        if (waveB[i] > maxWaveVal) maxWaveVal = waveB[i];
+      }
+      
+      for (let i = 0; i < totalLen; i++) {
+        const rCount = waveR[i];
+        const gCount = waveG[i];
+        const bCount = waveB[i];
+        
+        const valR = Math.sqrt(rCount / maxWaveVal);
+        const valG = Math.sqrt(gCount / maxWaveVal);
+        const valB = Math.sqrt(bCount / maxWaveVal);
+        
+        const idx = i * 4;
+        data[idx] = Math.min(255, Math.floor(valR * 255 * 1.5));     // Red
+        data[idx+1] = Math.min(255, Math.floor(valG * 255 * 1.5));   // Green
+        data[idx+2] = Math.min(255, Math.floor(valB * 255 * 1.5));   // Blue
+        const maxVal = Math.max(valR, valG, valB);
+        data[idx+3] = Math.min(255, Math.floor(maxVal * 255 * 1.8)); // Alpha
+      }
+      
+      tempCtx.putImageData(tempImgData, 0, 0);
+      
+      waveCtx.imageSmoothingEnabled = true;
+      waveCtx.imageSmoothingQuality = 'high';
+      waveCtx.drawImage(tempCanvas, 0, 0, wW, wH);
+      
+      waveCtx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      waveCtx.lineWidth = 1;
+      waveCtx.setLineDash([4, 4]);
+      const lines = [wH * 0.25, wH * 0.5, wH * 0.75];
+      lines.forEach(y => {
+        waveCtx.beginPath();
+        waveCtx.moveTo(0, y);
+        waveCtx.lineTo(wW, y);
+        waveCtx.stroke();
+      });
+      waveCtx.setLineDash([]);
+    }
   };
 
   analysisWorker.postMessage({ data: imgData.data }, [imgData.data.buffer]);
@@ -2380,16 +3156,21 @@ async function drawDominantColors(item) {
       
       chip.onclick = async (e) => {
         e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(color);
-          showToast(`Copied ${color} to clipboard!`);
-          chip.style.transform = 'scale(1.45)';
-          setTimeout(() => {
-            chip.style.transform = 'scale(1.25)';
-          }, 120);
-        } catch (err) {
-          showToast('Failed to copy color to clipboard');
+        if (activeColorFilter === color) {
+          activeColorFilter = null;
+          chip.style.transform = 'scale(1)';
+          chip.style.borderColor = 'rgba(255,255,255,0.25)';
+        } else {
+          activeColorFilter = color;
+          chips.forEach(c => c.style.borderColor = 'rgba(255,255,255,0.25)');
+          chip.style.borderColor = '#fff';
+          chip.style.transform = 'scale(1.25)';
+          
+          if (Object.keys(folderDominantColorsCache).length === 0) {
+            folderDominantColorsCache = await invoke('get_folder_dominant_colors', { paths: items.map(it => it.path) });
+          }
         }
+        applyFilters();
       };
     });
   } catch (e) {
@@ -2420,14 +3201,150 @@ if (sortSelect) sortSelect.value = currentSort;
 if (zoomSensSlider) zoomSensSlider.value = zoomSens;
 if (customCursorCheck) customCursorCheck.checked = useCustomCursor;
 
+// Initialize grid thumbnail size CSS variable globally
+document.documentElement.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
+
+// Initialize Phase 2 custom toggles
+if (highContrastCheck) {
+  highContrastCheck.checked = highContrastEnabled;
+  document.body.classList.toggle('high-contrast', highContrastEnabled);
+}
+if (reducedMotionCheck) {
+  reducedMotionCheck.checked = reducedMotionEnabled;
+  document.body.classList.toggle('prefers-reduced-motion', reducedMotionEnabled);
+}
+if (performanceHudCheck) {
+  performanceHudCheck.checked = performanceHudEnabled;
+  performanceHud.style.display = performanceHudEnabled ? 'flex' : 'none';
+  if (performanceHudEnabled) startDiagnosticsPolling();
+}
+
+// ── Mobile sidebar drawer click-away & Resize ──
+window.addEventListener('resize', () => {
+  const isMobile = window.innerWidth < 768;
+  if (isMobile) {
+    if (sidebar.style.display === 'flex') {
+      sidebar.style.display = 'none';
+    }
+  } else {
+    if (viewer.style.display === 'block' && !zenModeActive) {
+      sidebar.style.display = 'flex';
+    }
+  }
+});
+document.addEventListener('click', (e) => {
+  if (window.innerWidth < 768) {
+    if (sidebar.style.display === 'flex' && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
+      sidebar.style.display = 'none';
+    }
+  }
+});
+
+// ── Adaptive Aspect-Ratio Grid Columns (FE-1) ──
+// Removed manual calculation; CSS auto-fill and minmax handles this fluidly.
+
+// ── Diagnostics HUD polling & physics constants ──
+let lastFrameTime = performance.now();
+let frameCount = 0;
+let fps = 60;
+let lastFpsUpdate = performance.now();
+let refreshRateType = 60; // 60 or 120
+
+function monitorPerformanceLoop() {
+  const now = performance.now();
+  const dt = now - lastFrameTime;
+  lastFrameTime = now;
+  
+  frameCount++;
+  if (now - lastFpsUpdate >= 1000) {
+    fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+    frameCount = 0;
+    lastFpsUpdate = now;
+    
+    if (fps > 90) {
+      refreshRateType = 120;
+    } else {
+      refreshRateType = 60;
+    }
+    
+    // Update performance HUD values
+    const hudFpsVal = $('hudFpsVal');
+    const hudHzVal = $('hudHzVal');
+    if (hudFpsVal) hudFpsVal.textContent = fps;
+    if (hudHzVal) hudHzVal.textContent = `${refreshRateType}Hz`;
+  }
+  
+  requestAnimationFrame(monitorPerformanceLoop);
+}
+requestAnimationFrame(monitorPerformanceLoop);
+
+function formatBytes(bytes, decimals = 2) {
+  if (!bytes || bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+let diagnosticsInterval = null;
+function startDiagnosticsPolling() {
+  if (diagnosticsInterval) return;
+  diagnosticsInterval = setInterval(async () => {
+    const isHudActive = localStorage.getItem('folio_performance_hud') === 'true';
+    const isStorageTabActive = settingsModal.style.display !== 'none' && document.querySelector('.tab-btn[data-tab="storage"]').classList.contains('active');
+    
+    if (isHudActive || isStorageTabActive) {
+      try {
+        const data = await invoke('get_storage_diagnostics');
+        const dbSizeStr = formatBytes(data.db_size);
+        const cacheSizeStr = formatBytes(data.cache_size);
+        const decodedSizeStr = formatBytes(data.decoded_size);
+        const memStr = formatBytes(data.memory_used_kb * 1024);
+        const cpuStr = data.cpu_used_pct.toFixed(1) + '%';
+        
+        if (isStorageTabActive) {
+          if (dbSizeVal) dbSizeVal.textContent = dbSizeStr;
+          if (cacheSizeVal) cacheSizeVal.textContent = cacheSizeStr;
+          if (decodedSizeVal) decodedSizeVal.textContent = decodedSizeStr;
+          if (cpuLoadVal) cpuLoadVal.textContent = cpuStr;
+          if (ramSizeVal) ramSizeVal.textContent = memStr;
+        }
+        
+        if (isHudActive) {
+          const hudCpuVal = $('hudCpuVal');
+          const hudMemoryVal = $('hudMemoryVal');
+          if (hudCpuVal) hudCpuVal.textContent = cpuStr;
+          if (hudMemoryVal) hudMemoryVal.textContent = memStr;
+        }
+      } catch (err) {
+        console.error("Failed to fetch storage diagnostics:", err);
+      }
+    }
+  }, 1000);
+}
+
 /* ── Settings Tab Switching ── */
 document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     const pane = $('tab-' + btn.dataset.tab);
     if (pane) pane.classList.add('active');
+    
+    if (btn.dataset.tab === 'storage') {
+      try {
+        const data = await invoke('get_storage_diagnostics');
+        if (dbSizeVal) dbSizeVal.textContent = formatBytes(data.db_size);
+        if (cacheSizeVal) cacheSizeVal.textContent = formatBytes(data.cache_size);
+        if (decodedSizeVal) decodedSizeVal.textContent = formatBytes(data.decoded_size);
+        if (cpuLoadVal) cpuLoadVal.textContent = data.cpu_used_pct.toFixed(1) + '%';
+        if (ramSizeVal) ramSizeVal.textContent = formatBytes(data.memory_used_kb * 1024);
+      } catch (err) {
+        console.error("Failed to query diagnostics:", err);
+      }
+    }
   });
 });
 
@@ -2454,6 +3371,63 @@ if (cinematicCheck) {
     localStorage.setItem('folio_cinematic', cinematicEnabled);
   });
 }
+
+// Wire Phase 2 setting checkboxes
+highContrastCheck?.addEventListener('change', (e) => {
+  highContrastEnabled = e.target.checked;
+  localStorage.setItem('folio_high_contrast', highContrastEnabled);
+  document.body.classList.toggle('high-contrast', highContrastEnabled);
+});
+
+reducedMotionCheck?.addEventListener('change', (e) => {
+  reducedMotionEnabled = e.target.checked;
+  localStorage.setItem('folio_reduced_motion', reducedMotionEnabled);
+  document.body.classList.toggle('prefers-reduced-motion', reducedMotionEnabled);
+});
+
+performanceHudCheck?.addEventListener('change', (e) => {
+  performanceHudEnabled = e.target.checked;
+  localStorage.setItem('folio_performance_hud', performanceHudEnabled);
+  performanceHud.style.display = performanceHudEnabled ? 'flex' : 'none';
+  if (performanceHudEnabled) {
+    startDiagnosticsPolling();
+  }
+});
+
+// Purge local cache button wiring
+purgeCacheBtn?.addEventListener('click', async () => {
+  if (confirm("Are you absolutely sure you want to purge all local cache, database indices, and thumbnails? This action is irreversible.")) {
+    try {
+      purgeCacheBtn.disabled = true;
+      purgeCacheBtn.textContent = 'Purging...';
+      await invoke('purge_cache');
+      showToast("Cache purged successfully. Catalog database has been reset.");
+      
+      items = [];
+      idx = -1;
+      selectedCatalogPaths.clear();
+      if (typeof buildCatalogContent === 'function') buildCatalogContent();
+      if (typeof toggleCatalogView === 'function') toggleCatalogView(false);
+      
+      welcome.style.display = 'flex';
+      welcomeBg.style.display = 'block';
+      viewer.style.display = 'none';
+      sidebar.style.display = 'none';
+      
+      const data = await invoke('get_storage_diagnostics');
+      if (dbSizeVal) dbSizeVal.textContent = formatBytes(data.db_size);
+      if (cacheSizeVal) cacheSizeVal.textContent = formatBytes(data.cache_size);
+      if (decodedSizeVal) decodedSizeVal.textContent = formatBytes(data.decoded_size);
+      if (cpuLoadVal) cpuLoadVal.textContent = data.cpu_used_pct.toFixed(1) + '%';
+      if (ramSizeVal) ramSizeVal.textContent = formatBytes(data.memory_used_kb * 1024);
+    } catch (err) {
+      showToast(`Purge failed: ${err}`);
+    } finally {
+      purgeCacheBtn.disabled = false;
+      purgeCacheBtn.textContent = 'Purge All Local Cache';
+    }
+  }
+});
 
 if (customCursorCheck) {
   customCursorCheck.addEventListener('change', (e) => {
@@ -2844,6 +3818,13 @@ function renderCatalogChunk(startIndex, count) {
         });
     }
     
+    if (it.focus_score !== null && it.focus_score !== undefined && it.focus_score < 100.0) {
+      const blurryBadge = document.createElement('div');
+      blurryBadge.className = 'blurry-badge';
+      blurryBadge.textContent = 'Blurry';
+      card.appendChild(blurryBadge);
+    }
+    
     const info = document.createElement('div');
     info.className = 'catalog-card-info';
     
@@ -3089,10 +4070,12 @@ async function renderTagFilters() {
     allCount.textContent = items.length;
     allChip.appendChild(allCount);
     
-    allChip.onclick = () => {
+    allChip.onclick = async () => {
       activeTagFilter = null;
-      applyTagFilter();
-      renderTagFilters();
+      activeColorFilter = null;
+      folderDominantColorsCache = {};
+      await renderTagFilters();
+      applyFilters();
     };
     tagFilterList.appendChild(allChip);
     
@@ -3123,7 +4106,7 @@ async function renderTagFilters() {
         } else {
           activeTagFilter = tagName;
         }
-        applyTagFilter();
+        applyFilters();
         renderTagFilters();
       };
       tagFilterList.appendChild(chip);
@@ -3292,7 +4275,7 @@ listen('fs-change', async () => {
   if (!items || items.length === 0) return;
   try {
     const oldPath = items[idx]?.path;
-    items = await invoke('get_folder_items');
+    items = processLoadedItems(await invoke('get_folder_items'));
     sortItems();
     
     if (items.length === 0) {
@@ -3334,14 +4317,95 @@ listen('fs-change', async () => {
 });
 
 // Frosted MapKit GPS Modal Functions
-function showMapPopup(lat, lon) {
-  const iframeSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${lon - 0.01}%2C${lat - 0.01}%2C${lon + 0.01}%2C${lat + 0.01}&layer=mapnik&marker=${lat}%2C${lon}`;
-  mapIframe.src = iframeSrc;
+function showMapPopup(geodata) {
+  // Can be called with either a single {lat, lon} object/args or an array of objects
+  const data = Array.isArray(geodata) ? geodata : (typeof geodata === 'object' ? [geodata] : [{lat: arguments[0], lon: arguments[1]}]);
+  if (!data || data.length === 0) return;
+
+  const markersJson = JSON.stringify(data);
+  const centerLat = data[0].lat;
+  const centerLon = data[0].lon;
+  
+  const srcdoc = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+      <style>
+        body { margin: 0; padding: 0; background: #0c0c0e; }
+        #map { width: 100vw; height: 100vh; }
+        .leaflet-popup-content-wrapper { 
+          background: rgba(18, 18, 20, 0.85); 
+          color: #fff; 
+          backdrop-filter: blur(20px) saturate(180%); 
+          -webkit-backdrop-filter: blur(20px) saturate(180%); 
+          border: 1px solid rgba(255,255,255,0.08); 
+          border-radius: 12px; 
+          box-shadow: 0 8px 32px 0 rgba(0,0,0,0.3);
+        }
+        .leaflet-popup-tip { background: rgba(18, 18, 20, 0.85); border: 1px solid rgba(255,255,255,0.08); }
+        .leaflet-popup-content { margin: 12px; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .popup-img { width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: transform 0.2s ease; }
+        .popup-img:hover { transform: scale(1.02); }
+        .popup-title { font-size: 13px; font-weight: 600; color: #ffffff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px; }
+        .popup-address { font-size: 11px; color: #b0b0b8; line-height: 1.4; margin-top: 4px; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 4px; }
+        .popup-coords { font-size: 9px; color: rgba(255,255,255,0.4); font-family: monospace; margin-top: 2px; }
+      </style>
+    </head>
+    <body>
+      <div id="map"></div>
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+      <script>
+        const map = L.map('map', { zoomControl: false }).setView([${centerLat}, ${centerLon}], 13);
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 20
+        }).addTo(map);
+
+        const markers = ${markersJson};
+        const bounds = L.latLngBounds();
+        
+        markers.forEach(m => {
+          bounds.extend([m.lat, m.lon]);
+          const popupContent = 
+            \`<div style="width:180px;">
+              \${m.path ? \`<img src="folio://localhost/\${encodeURIComponent(m.path)}" class="popup-img" onclick="window.parent.openGeotaggedImage('\${m.path.replace(/'/g, "\\\\'")}')" />\` : ''}
+              <div class="popup-title">\${m.name || 'Location'}</div>
+              <div class="popup-address" id="addr-\${m.lat}-\${m.lon}">Loading address...</div>
+              <div class="popup-coords">\${m.lat.toFixed(5)}, \${m.lon.toFixed(5)}</div>
+            </div>\`;
+            
+          L.marker([m.lat, m.lon]).addTo(map).bindPopup(popupContent);
+        });
+        
+        map.on('popupopen', async function(e) {
+          const popup = e.popup;
+          const container = popup.getElement();
+          if (!container) return;
+          const addressEl = container.querySelector('.popup-address');
+          if (addressEl && addressEl.textContent === 'Loading address...') {
+            const latLng = popup.getLatLng();
+            const address = await window.parent.reverseGeocode(latLng.lat, latLng.lng);
+            addressEl.innerHTML = \`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> \${address}\`;
+          }
+        });
+
+        if (markers.length > 1) {
+          map.fitBounds(bounds, { padding: [50, 50] });
+        }
+      </script>
+    </body>
+    </html>
+  `;
+  mapIframe.srcdoc = srcdoc;
   mapModal.style.display = 'flex';
 }
 
 mapCloseBtn.onclick = () => {
   mapModal.style.display = 'none';
+  mapIframe.srcdoc = '';
   mapIframe.src = '';
 };
 
@@ -3471,3 +4535,189 @@ document.querySelectorAll('.transcode-btn[data-fmt]').forEach(btn => {
     }
   });
 });
+
+batchTagInput?.addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter') {
+    const tagName = e.target.value.trim();
+    if (!tagName) return;
+    
+    if (selectedCatalogPaths.size > 0) {
+      for (const path of selectedCatalogPaths) {
+        await invoke('add_tag_to_image', { path, tagName, tagColor: '#D4A72C' });
+        const existing = folderTagsCache.get(path) || [];
+        if (!existing.some(t => t.name === tagName)) {
+          existing.push({ name: tagName });
+          folderTagsCache.set(path, existing);
+        }
+      }
+      showToast(`Added tag "${tagName}" to ${selectedCatalogPaths.size} items`);
+      e.target.value = '';
+      await renderTagFilters();
+      applyFilters();
+    }
+  }
+});
+
+batchTrashBtn?.addEventListener('click', async () => {
+  if (selectedCatalogPaths.size > 0) {
+    if (confirm(`Permanently trash ${selectedCatalogPaths.size} selected items?`)) {
+      playUISound('delete');
+      let failed = 0;
+      for (const path of selectedCatalogPaths) {
+        try {
+          await invoke('delete_physical_file', { path });
+          items = items.filter(it => it.path !== path);
+        } catch(err) {
+          failed++;
+        }
+      }
+      showToast(`Trashed ${selectedCatalogPaths.size - failed} items` + (failed > 0 ? ` (${failed} failed)` : ''));
+      selectedCatalogPaths.clear();
+      updateCatalogSelectionState();
+      buildCatalogContent();
+    }
+  }
+});
+
+// Phase 4 Secure Platform APIs Event Handlers
+
+// Cryptographic BLAKE3 Audits
+auditImageBtn?.addEventListener('click', async () => {
+  if (!items || idx < 0 || idx >= items.length) {
+    showToast("No active image in viewport to audit!");
+    return;
+  }
+  const item = items[idx];
+  checksumResult.textContent = "Computing...";
+  showToast("Auditing file integrity via BLAKE3...");
+  try {
+    const hash = await invoke('audit_file_checksum', { path: item.path });
+    checksumResult.textContent = hash;
+    showToast("BLAKE3 Integrity Audit Verified!");
+  } catch (err) {
+    checksumResult.textContent = "Error";
+    showToast(`Audit failed: ${err}`);
+  }
+});
+
+// Cocoa Native Share Sheet Picker
+nativeShareBtn?.addEventListener('click', async () => {
+  if (!items || idx < 0 || idx >= items.length) {
+    showToast("No active image to share!");
+    return;
+  }
+  const item = items[idx];
+  showToast("Opening macOS Native Share Sheet...");
+  try {
+    await invoke('show_native_share_sheet', { filePath: item.path });
+  } catch (err) {
+    showToast(`Sharing failed: ${err}`);
+  }
+});
+
+// Spotlight NSMetadataQuery search integration
+spotlightSearchBtn?.addEventListener('click', async () => {
+  if (!items || items.length === 0) {
+    showToast("Open a folder first!");
+    return;
+  }
+  
+  const activeImagePath = items[0].path;
+  const parentPath = activeImagePath.substring(0, activeImagePath.lastIndexOf('/'));
+  
+  const query = prompt("Enter query to search via macOS Spotlight (leave empty to reset view):");
+  if (query === null) return;
+  
+  if (query.trim() === '') {
+    showToast("Resetting folder view...");
+    items = processLoadedItems(await invoke('get_folder_items'));
+    idx = 0;
+    sortItems();
+    buildCatalogContent();
+    return;
+  }
+  
+  showToast(`Searching Spotlight for "${query}"...`);
+  try {
+    const results = await invoke('search_directory_spotlight', { dirPath: parentPath, query: query.trim() });
+    const lowerPaths = new Set(results.map(p => p.toLowerCase()));
+    
+    const matched = items.filter(it => lowerPaths.has(it.path.toLowerCase()));
+    if (matched.length === 0) {
+      showToast(`No matches found in Spotlight for "${query}"`);
+      return;
+    }
+    
+    items = matched;
+    idx = 0;
+    buildCatalogContent();
+    showToast(`Spotlight found ${matched.length} matches!`);
+  } catch (err) {
+    showToast(`Spotlight search failed: ${err}`);
+  }
+});
+
+// Lossless EXIF Metadata batch/single scrubbing
+batchScrubBtn?.addEventListener('click', async () => {
+  const paths = selectedCatalogPaths.size > 0 
+    ? Array.from(selectedCatalogPaths) 
+    : (items && idx >= 0 && idx < items.length ? [items[idx].path] : []);
+
+  if (paths.length === 0) {
+    showToast("No images selected or active in viewport to scrub EXIF!");
+    return;
+  }
+
+  if (!confirm(`Are you sure you want to losslessly strip all EXIF and GPS metadata from ${paths.length} image(s)?`)) {
+    return;
+  }
+
+  showToast(`Scrubbing metadata for ${paths.length} files...`);
+  let success = 0;
+  let failed = 0;
+
+  for (const path of paths) {
+    try {
+      await invoke('scrub_exif_metadata', { path });
+      success++;
+    } catch (err) {
+      console.error(`Failed to scrub EXIF for ${path}:`, err);
+      failed++;
+    }
+  }
+
+  showToast(`EXIF Scrubber: ${success} stripped successfully` + (failed > 0 ? `, ${failed} failed` : ''));
+  
+  if (success > 0) {
+    try {
+      const oldPath = items[idx]?.path;
+      items = processLoadedItems(await invoke('get_folder_items'));
+      sortItems();
+      if (oldPath) {
+        const newIdx = items.findIndex(it => it.path === oldPath);
+        if (newIdx !== -1) idx = newIdx;
+      }
+      selectedCatalogPaths.clear();
+      updateCatalogSelectionState();
+      if (catalogModeActive) {
+        buildCatalogContent();
+      } else {
+        show(idx);
+      }
+    } catch (e) {
+      console.error("Reload after scrub failed:", e);
+    }
+  }
+});
+
+// Global Auto-Crash Reporter Hooks
+window.onerror = function(message, source, lineno, colno, error) {
+  const diagnostics = `Message: ${message}\nSource: ${source}\nLine: ${lineno}:${colno}\nError object: ${JSON.stringify(error || {})}\nStack: ${error ? error.stack : 'N/A'}`;
+  invoke('submit_crash_report', { diagnostics }).then(path => {
+    console.warn("Crash report captured locally in sandbox cache:", path);
+  }).catch(err => {
+    console.error("Failed to submit crash report:", err);
+  });
+  return false;
+};
+

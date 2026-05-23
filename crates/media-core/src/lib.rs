@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![deny(unsafe_code)]
 pub mod edit;
 pub use edit::{SimpleEdit, apply_edit};
 
@@ -30,6 +30,7 @@ pub struct ImageMetadata {
     pub orientation: u16,
     pub format: Option<image::ImageFormat>,
     pub exif: Option<ExifData>,
+    pub focus_score: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -263,12 +264,12 @@ pub fn open_image(path: &Path) -> Result<DynamicImage> {
         .unwrap_or_default();
 
     if image_crate_native(&ext) {
-        let file = std::fs::File::open(path)
-            .with_context(|| format!("failed to open image file: {}", path.display()))?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }
-            .with_context(|| format!("failed to memory-map image: {}", path.display()))?;
-        return image::load_from_memory(&mmap)
-            .with_context(|| format!("failed to decode memory-mapped image: {}", path.display()));
+        let reader = ImageReader::open(path)
+            .with_context(|| format!("failed to open image file: {}", path.display()))?
+            .with_guessed_format()
+            .with_context(|| format!("failed to guess format: {}", path.display()))?;
+        return reader.decode()
+            .with_context(|| format!("failed to decode image: {}", path.display()));
     }
 
     // On macOS, always use sips for TIFF and everything else non-native.
@@ -344,6 +345,7 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
             orientation: 1,
             format: None,
             exif: None,
+            focus_score: None,
         });
     }
 
@@ -360,9 +362,7 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
     let (width, height, format) = if image_crate_native(&ext) {
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open image file: {}", path.display()))?;
-        let mmap = unsafe { memmap2::Mmap::map(&file) }
-            .with_context(|| format!("failed to memory-map image: {}", path.display()))?;
-        let reader = ImageReader::new(std::io::Cursor::new(&mmap))
+        let reader = ImageReader::new(std::io::BufReader::new(file))
             .with_guessed_format()
             .with_context(|| format!("failed to guess format: {}", path.display()))?;
         let fmt = reader.format();
@@ -395,7 +395,14 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
     };
 
     let (orientation, exif_data) = read_full_exif(path).unwrap_or((1, None));
-    Ok(ImageMetadata { width, height, orientation, format, exif: exif_data })
+    Ok(ImageMetadata {
+        width,
+        height,
+        orientation,
+        format,
+        exif: exif_data,
+        focus_score: None,
+    })
 }
 
 pub fn read_metadata(path: &Path) -> Result<ImageMetadata> {
@@ -416,7 +423,23 @@ pub fn decode_image(path: &Path, max_side: Option<u32>) -> Result<DecodedImage> 
     Ok(DecodedImage { width, height, rgba: rgba8.into_vec() })
 }
 
+/// Decode image with a pre-known orientation value, skipping EXIF re-read.
+pub fn decode_image_with_orientation(path: &Path, max_side: Option<u32>, orientation: u16) -> Result<DecodedImage> {
+    let mut img = open_image(path)?;
+    img = apply_orientation(img, orientation);
+
+    if let Some(max_side) = max_side {
+        img = downscale_if_needed(img, max_side);
+    }
+
+    let rgba8 = img.to_rgba8();
+    let (width, height) = img.dimensions();
+    Ok(DecodedImage { width, height, rgba: rgba8.into_vec() })
+}
+
 fn downscale_if_needed(image: DynamicImage, max_side: u32) -> DynamicImage {
+    use fast_image_resize::IntoImageView;
+
     let (width, height) = image.dimensions();
     let current_max = width.max(height);
     if current_max <= max_side || max_side == 0 {
@@ -426,7 +449,47 @@ fn downscale_if_needed(image: DynamicImage, max_side: u32) -> DynamicImage {
     let scale = max_side as f32 / current_max as f32;
     let target_w = (width as f32 * scale).round().max(1.0) as u32;
     let target_h = (height as f32 * scale).round().max(1.0) as u32;
+
+    let src_view = &image;
+    let pixel_type = match src_view.pixel_type() {
+        Some(t) => t,
+        None => return image.resize(target_w, target_h, image::imageops::FilterType::Lanczos3),
+    };
+
+    let mut dst_image = fast_image_resize::images::Image::new(
+        target_w,
+        target_h,
+        pixel_type,
+    );
+
+    let mut resizer = fast_image_resize::Resizer::new();
+    let mut options = fast_image_resize::ResizeOptions::default();
+    options.algorithm = fast_image_resize::ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3);
+
+    if resizer.resize(src_view, &mut dst_image, Some(&options)).is_ok() {
+        let buffer = dst_image.into_vec();
+        match pixel_type {
+            fast_image_resize::PixelType::U8x4 => {
+                if let Some(buf) = image::RgbaImage::from_raw(target_w, target_h, buffer) {
+                    return DynamicImage::ImageRgba8(buf);
+                }
+            }
+            fast_image_resize::PixelType::U8x3 => {
+                if let Some(buf) = image::RgbImage::from_raw(target_w, target_h, buffer) {
+                    return DynamicImage::ImageRgb8(buf);
+                }
+            }
+            fast_image_resize::PixelType::U8 => {
+                if let Some(buf) = image::GrayImage::from_raw(target_w, target_h, buffer) {
+                    return DynamicImage::ImageLuma8(buf);
+                }
+            }
+            _ => {}
+        }
+    }
+
     image.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+
 }
 
 fn read_exif_orientation(path: &Path) -> Result<u16> {
@@ -436,8 +499,7 @@ fn read_exif_orientation(path: &Path) -> Result<u16> {
 
 fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
     let file = File::open(path)?;
-    let mmap = unsafe { memmap2::Mmap::map(&file)? };
-    let mut reader = std::io::Cursor::new(&mmap);
+    let mut reader = std::io::BufReader::new(file);
     let exif = match Reader::new().read_from_container(&mut reader) {
         Ok(e) => e,
         Err(_) => return Ok((1, None)),
@@ -521,7 +583,13 @@ pub fn apply_exif_orientation(image: &DynamicImage, path: &Path) -> DynamicImage
     apply_orientation(image.clone(), orientation)
 }
 
-fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
+/// Apply a known orientation value to an already-opened DynamicImage.
+/// Use this when orientation is already available (e.g. from ImageMetadata) to avoid re-reading EXIF.
+pub fn apply_orientation_value(image: DynamicImage, orientation: u16) -> DynamicImage {
+    apply_orientation(image, orientation)
+}
+
+pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage {
     match orientation {
         2 => image.fliph(),
         3 => image.rotate180(),
@@ -546,17 +614,48 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
         return vec!["#000000".to_string(); count];
     }
     
-    let mut centroids = Vec::new();
-    let step = pixels.len() / count;
-    for i in 0..count {
-        centroids.push(pixels[(i * step).min(pixels.len() - 1)]);
+    // k-means++ initialization
+    let mut centroids = Vec::with_capacity(count);
+    let mut distances = vec![f32::MAX; pixels.len()];
+    
+    // First centroid: random-ish pick (use first pixel for determinism)
+    centroids.push(pixels[0]);
+    
+    for _ in 1..count {
+        // Update distances to nearest centroid
+        let last = &centroids[centroids.len() - 1];
+        let mut total = 0.0f32;
+        for (i, &pixel) in pixels.iter().enumerate() {
+            let dist = (pixel[0] - last[0]).powi(2)
+                + (pixel[1] - last[1]).powi(2)
+                + (pixel[2] - last[2]).powi(2);
+            distances[i] = distances[i].min(dist);
+            total += distances[i];
+        }
+        
+        // Pick next centroid with probability proportional to distance²
+        if total <= 0.0 {
+            centroids.push(pixels[pixels.len() / 2]);
+        } else {
+            let target = (pixels.len() as f32 / (count as f32)) * total / pixels.len() as f32;
+            let mut accum = 0.0f32;
+            let mut chosen = pixels.len() - 1;
+            for (i, &d) in distances.iter().enumerate() {
+                accum += d;
+                if accum >= target {
+                    chosen = i;
+                    break;
+                }
+            }
+            centroids.push(pixels[chosen]);
+        }
     }
     
     let mut assignments = vec![0; pixels.len()];
     let mut cluster_sums = vec![[0.0f32; 3]; count];
     let mut cluster_counts = vec![0; count];
     
-    for _ in 0..5 {
+    for _ in 0..10 {
         cluster_sums.fill([0.0, 0.0, 0.0]);
         cluster_counts.fill(0);
         
@@ -579,15 +678,26 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
             cluster_counts[best_centroid] += 1;
         }
         
+        let mut converged = true;
         for c_idx in 0..count {
             let len = cluster_counts[c_idx] as f32;
             if len > 0.0 {
-                centroids[c_idx] = [
+                let new_centroid = [
                     cluster_sums[c_idx][0] / len,
                     cluster_sums[c_idx][1] / len,
                     cluster_sums[c_idx][2] / len,
                 ];
+                let shift = (new_centroid[0] - centroids[c_idx][0]).powi(2)
+                    + (new_centroid[1] - centroids[c_idx][1]).powi(2)
+                    + (new_centroid[2] - centroids[c_idx][2]).powi(2);
+                if shift > 1.0 {
+                    converged = false;
+                }
+                centroids[c_idx] = new_centroid;
             }
+        }
+        if converged {
+            break;
         }
     }
     
@@ -606,6 +716,107 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
     }
     hex_colors.truncate(count);
     hex_colors
+}
+
+pub fn compute_histogram_from_image(img: &image::DynamicImage) -> ([u32; 256], [u32; 256], [u32; 256], [u32; 256]) {
+    let mut r = [0u32; 256];
+    let mut g = [0u32; 256];
+    let mut b = [0u32; 256];
+    let mut lum = [0u32; 256];
+
+    if let Some(rgb) = img.as_rgb8() {
+        for pixel in rgb.pixels() {
+            let pr = pixel[0] as usize;
+            let pg = pixel[1] as usize;
+            let pb = pixel[2] as usize;
+            r[pr] += 1;
+            g[pg] += 1;
+            b[pb] += 1;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            lum[l.min(255)] += 1;
+        }
+    } else if let Some(rgba) = img.as_rgba8() {
+        for pixel in rgba.pixels() {
+            let pr = pixel[0] as usize;
+            let pg = pixel[1] as usize;
+            let pb = pixel[2] as usize;
+            r[pr] += 1;
+            g[pg] += 1;
+            b[pb] += 1;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            lum[l.min(255)] += 1;
+        }
+    } else {
+        let rgb = img.to_rgb8();
+        for pixel in rgb.pixels() {
+            let pr = pixel[0] as usize;
+            let pg = pixel[1] as usize;
+            let pb = pixel[2] as usize;
+            r[pr] += 1;
+            g[pg] += 1;
+            b[pb] += 1;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            lum[l.min(255)] += 1;
+        }
+    }
+
+    (r, g, b, lum)
+}
+
+pub fn detect_focus_blur(img: &DynamicImage) -> f64 {
+    let scaled = if img.width() > 640 || img.height() > 640 {
+        img.thumbnail(640, 640)
+    } else {
+        img.clone()
+    };
+    
+    let gray = scaled.to_luma8();
+    let width = gray.width() as usize;
+    let height = gray.height() as usize;
+    
+    if width < 3 || height < 3 {
+        return 0.0;
+    }
+    
+    let raw = gray.as_raw();
+    let mut sum = 0.0;
+    let mut count = 0;
+    
+    let mut laplacians = Vec::with_capacity((width - 2) * (height - 2));
+    
+    for y in 1..(height - 1) {
+        let prev_idx = (y - 1) * width;
+        let curr_idx = y * width;
+        let next_idx = (y + 1) * width;
+        
+        for x in 1..(width - 1) {
+            let p_top = raw[prev_idx + x] as i32;
+            let p_left = raw[curr_idx + x - 1] as i32;
+            let p_center = raw[curr_idx + x] as i32;
+            let p_right = raw[curr_idx + x + 1] as i32;
+            let p_bottom = raw[next_idx + x] as i32;
+            
+            let lap = p_top + p_left - 4 * p_center + p_right + p_bottom;
+            let lap_f = lap as f64;
+            sum += lap_f;
+            laplacians.push(lap_f);
+            count += 1;
+        }
+    }
+    
+    if count == 0 {
+        return 0.0;
+    }
+    
+    let mean = sum / (count as f64);
+    let mut variance_sum = 0.0;
+    
+    for &lap in &laplacians {
+        let diff = lap - mean;
+        variance_sum += diff * diff;
+    }
+    
+    variance_sum / (count as f64)
 }
 
 #[cfg(test)]

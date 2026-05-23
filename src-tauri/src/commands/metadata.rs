@@ -33,6 +33,7 @@ pub async fn update_exif_metadata(
             "UPDATE image_metadata SET camera = ?, aperture = ?, shutter_speed = ?, iso = ?, focal_length = ? WHERE path = ?",
             rusqlite::params![camera, aperture, shutter_speed, iso, focal_length, path],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
 
         let mut index_lock = state_arc.index.write();
         if let Some(index) = &mut *index_lock {
@@ -74,6 +75,7 @@ pub async fn add_tag_to_image(
             "INSERT OR IGNORE INTO image_tags (image_path, tag_name) VALUES (?, ?)",
             rusqlite::params![path, tag_name],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
         Ok::<(), String>(())
     })
     .await
@@ -93,6 +95,7 @@ pub async fn remove_tag_from_image(
             "DELETE FROM image_tags WHERE image_path = ? AND tag_name = ?",
             rusqlite::params![path, tag_name],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
         Ok::<(), String>(())
     })
     .await
@@ -154,6 +157,7 @@ pub async fn create_album(name: String, state: State<'_, Arc<AppState>>) -> Resu
             "INSERT INTO albums (name) VALUES (?)",
             rusqlite::params![name],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
         Ok::<i64, String>(conn.last_insert_rowid())
     })
     .await
@@ -169,6 +173,7 @@ pub async fn add_image_to_album(album_id: i64, path: String, state: State<'_, Ar
             "INSERT OR IGNORE INTO album_images (album_id, image_path) VALUES (?, ?)",
             rusqlite::params![album_id, path],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
         Ok::<(), String>(())
     })
     .await
@@ -184,6 +189,7 @@ pub async fn remove_image_from_album(album_id: i64, path: String, state: State<'
             "DELETE FROM album_images WHERE album_id = ? AND image_path = ?",
             rusqlite::params![album_id, path],
         ).map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
         Ok::<(), String>(())
     })
     .await
