@@ -1,6 +1,6 @@
+use crate::AppState;
 use std::sync::Arc;
 use tauri::State;
-use crate::AppState;
 
 #[tauri::command]
 pub async fn get_recent_folders(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
@@ -8,7 +8,10 @@ pub async fn get_recent_folders(state: State<'_, Arc<AppState>>) -> Result<Vec<S
 }
 
 #[tauri::command]
-pub async fn add_recent_folder(path: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn add_recent_folder(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if !p.exists() || !p.is_dir() {
         return Err("The specified path does not exist or is not a directory".to_string());

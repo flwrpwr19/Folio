@@ -75,6 +75,7 @@ app.innerHTML = `
       <div class="catalog-header-actions">
         <button class="catalog-btn" id="catalogMapBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> Map View</button>
         <button class="catalog-btn" id="catalogDuplicatesBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg> Find Duplicates</button>
+        <button class="catalog-btn" id="catalogFinderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2"/></svg> Finder</button>
         <button class="catalog-btn" id="catalogNewFolderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> New Folder</button>
         <button class="catalog-btn" data-tooltip="⇧/⌘ + Click to select multiple" style="opacity: 0.5; padding: 6px 8px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></button>
         <button class="catalog-btn" id="catalogCloseBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Close Grid</button>
@@ -273,6 +274,10 @@ app.innerHTML = `
             </select>
           </div>
           <div class="setting-row">
+            <label for="reverseGeocodeCheck">Look up addresses from GPS coordinates</label>
+            <input type="checkbox" id="reverseGeocodeCheck" />
+          </div>
+          <div class="setting-row">
             <label for="vibrancyCheck">Enable Window Vibrancy</label>
             <input type="checkbox" id="vibrancyCheck" />
           </div>
@@ -438,7 +443,7 @@ app.innerHTML = `
 
 /* ── DOM REFS ── */
 const $ = id => document.getElementById(id);
-const welcome = $('welcome'), welcomeBg = $('welcomeBg'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), customCursor = $('customCursor'), customCursorCheck = $('customCursorCheck'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogMapBtn = $('catalogMapBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), edAddress = $('edAddress'), mapModal = $('mapModal'), mapCloseBtn = $('mapCloseBtn'), mapIframe = $('mapIframe'), compareBtn = $('compareBtn'), transcodeHud = $('transcodeHud'), transcodeCount = $('transcodeCount'), transcodeClose = $('transcodeClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput'), watermarkAnchorSelect = $('watermarkAnchorSelect'), batchTagInput = $('batchTagInput'), batchTrashBtn = $('batchTrashBtn');
+const welcome = $('welcome'), welcomeBg = $('welcomeBg'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), customCursor = $('customCursor'), customCursorCheck = $('customCursorCheck'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), reverseGeocodeCheck = $('reverseGeocodeCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogFinderBtn = $('catalogFinderBtn'), catalogMapBtn = $('catalogMapBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), edAddress = $('edAddress'), mapModal = $('mapModal'), mapCloseBtn = $('mapCloseBtn'), mapIframe = $('mapIframe'), compareBtn = $('compareBtn'), transcodeHud = $('transcodeHud'), transcodeCount = $('transcodeCount'), transcodeClose = $('transcodeClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput'), watermarkAnchorSelect = $('watermarkAnchorSelect'), batchTagInput = $('batchTagInput'), batchTrashBtn = $('batchTrashBtn');
 
 // DOM Refs for Phase 2 Responsive Workspace & Fine-Grained Controls
 const highContrastCheck = $('highContrastCheck'),
@@ -596,6 +601,7 @@ let vibrancyEnabled = localStorage.getItem('folio_vibrancy') === 'true';
 let gridView = localStorage.getItem('folio_grid_view') === 'true';
 let activeColorBlindMode = localStorage.getItem('folio_color_blind') || 'none';
 let activeWatermark = localStorage.getItem('folio_watermark') || '';
+let reverseGeocodeEnabled = localStorage.getItem('folio_reverse_geocode_enabled') === 'true';
 
 // Load settings for Phase 2 features
 let highContrastEnabled = localStorage.getItem('folio_high_contrast') === 'true';
@@ -615,6 +621,7 @@ const preloadCache = new Map();
 const geocodeCache = new Map();
 async function reverseGeocode(lat, lon) {
   if (lat === undefined || lat === null || lon === undefined || lon === null) return 'No coordinates';
+  if (!reverseGeocodeEnabled) return 'Address lookup disabled';
   const key = `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
   if (geocodeCache.has(key)) return geocodeCache.get(key);
   try {
@@ -688,8 +695,22 @@ if (stripMetadataCheck) {
 let biometricVaultEnabled = localStorage.getItem('folio_biometric_lock') === 'true';
 if (biometricVaultCheck) {
   biometricVaultCheck.checked = biometricVaultEnabled;
-  biometricVaultCheck.addEventListener('change', (e) => {
+  biometricVaultCheck.addEventListener('change', async (e) => {
     biometricVaultEnabled = e.target.checked;
+    if (biometricVaultEnabled) {
+      try {
+        const ok = await invoke('authenticate_vault');
+        if (!ok) {
+          biometricVaultEnabled = false;
+          biometricVaultCheck.checked = false;
+          showToast('Biometric setup was cancelled');
+        }
+      } catch (err) {
+        biometricVaultEnabled = false;
+        biometricVaultCheck.checked = false;
+        showToast(`Biometric lock unavailable: ${err}`);
+      }
+    }
     localStorage.setItem('folio_biometric_lock', biometricVaultEnabled);
   });
 }
@@ -725,6 +746,16 @@ if (colorBlindSelect) {
     activeColorBlindMode = e.target.value;
     localStorage.setItem('folio_color_blind', activeColorBlindMode);
     applyColorBlindMode();
+  });
+}
+
+if (reverseGeocodeCheck) {
+  reverseGeocodeCheck.checked = reverseGeocodeEnabled;
+  reverseGeocodeCheck.addEventListener('change', (e) => {
+    reverseGeocodeEnabled = e.target.checked;
+    localStorage.setItem('folio_reverse_geocode_enabled', reverseGeocodeEnabled);
+    geocodeCache.clear();
+    if (items[idx]) show(idx);
   });
 }
 
@@ -882,22 +913,18 @@ function renderMediaError(layer, item, onRetry) {
     animation: fadeIn var(--transition-dur-normal) var(--ease-spring);
   `;
   
-  errCard.innerHTML = `
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ff4b4b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-      <line x1="12" y1="9" x2="12" y2="13"/>
-      <line x1="12" y1="17" x2="12.01" y2="17"/>
-    </svg>
-    <div style="font-weight: 600; font-size: 15px; margin-top: 8px;">Failed to Load Media</div>
-    <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; word-break: break-all; margin-top: 4px;">
-      ${item.path.split('/').pop()}
-    </div>
-    <button class="catalog-btn retry-btn" style="margin-top: 16px; border-color: rgba(255,75,75,0.25); background: rgba(255,75,75,0.05); color: #ff6b6b; cursor: pointer; outline: none;">
-      Retry Loading
-    </button>
-  `;
+  const title = document.createElement('div');
+  title.textContent = 'Failed to Load Media';
+  title.style.cssText = 'font-weight: 600; font-size: 15px; margin-top: 8px;';
+  const name = document.createElement('div');
+  name.textContent = item.path.split('/').pop();
+  name.style.cssText = 'font-size: 12px; color: var(--text-secondary); line-height: 1.4; word-break: break-all; margin-top: 4px;';
+  const retryBtn = document.createElement('button');
+  retryBtn.className = 'catalog-btn retry-btn';
+  retryBtn.textContent = 'Retry Loading';
+  retryBtn.style.cssText = 'margin-top: 16px; border-color: rgba(255,75,75,0.25); background: rgba(255,75,75,0.05); color: #ff6b6b; cursor: pointer; outline: none;';
+  errCard.append(title, name, retryBtn);
   
-  const retryBtn = errCard.querySelector('.retry-btn');
   retryBtn.onclick = (e) => {
     e.stopPropagation();
     onRetry();
@@ -986,8 +1013,23 @@ function showToast(message) {
   if (!container) return;
   const toast = document.createElement('div');
   toast.className = 'toast';
-  const svgMarkup = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
-  toast.innerHTML = `${svgMarkup}<span>${message}</span>`;
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('width', '14');
+  icon.setAttribute('height', '14');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '3');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M22 11.08V12a10 10 0 1 1-5.93-9.14');
+  const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  poly.setAttribute('points', '22 4 12 14.01 9 11.01');
+  icon.append(path, poly);
+  const label = document.createElement('span');
+  label.textContent = String(message);
+  toast.append(icon, label);
   container.appendChild(toast);
   activeToasts.push(toast);
   
@@ -1110,15 +1152,22 @@ async function renderRecentFolders() {
     }
     const list = fullList.slice(0, 4);
 
-    container.innerHTML = '<div class="recents-title">Recent Folders</div>';
+    container.replaceChildren();
+    const title = document.createElement('div');
+    title.className = 'recents-title';
+    title.textContent = 'Recent Folders';
+    container.appendChild(title);
     list.forEach(path => {
       const card = document.createElement('div');
       card.className = 'recent-card';
       const name = path.split('/').pop() || path;
-      card.innerHTML = `
-        <span class="recent-name">${name}</span>
-        <span class="recent-path">${path.replace(/^\/Users\/[^\/]+/, '~')}</span>
-      `;
+      const nameEl = document.createElement('span');
+      nameEl.className = 'recent-name';
+      nameEl.textContent = name;
+      const pathEl = document.createElement('span');
+      pathEl.className = 'recent-path';
+      pathEl.textContent = path.replace(/^\/Users\/[^\/]+/, '~');
+      card.append(nameEl, pathEl);
       card.addEventListener('click', async () => {
         try {
           const p = await invoke('open_specific_folder', { path });
@@ -1249,6 +1298,28 @@ async function openFolder() {
         renderRecentFolders();
         loadFolderData(p);
     } catch (e) { console.error(e); }
+}
+
+function currentFolderPath() {
+  const activePath = items[idx]?.path || items[0]?.path;
+  if (!activePath) return null;
+  return activePath.substring(0, activePath.lastIndexOf('/'));
+}
+
+async function openPathInFinder(path, reveal = false) {
+  if (!path) {
+    showToast('Open a folder first');
+    return;
+  }
+  try {
+    await invoke('open_in_finder', { path, reveal });
+  } catch (e) {
+    showToast(`Finder failed: ${e}`);
+  }
+}
+
+function openCurrentFolderInFinder() {
+  openPathInFinder(currentFolderPath(), false);
 }
 
 
@@ -1760,7 +1831,7 @@ function show(i, dir = null) {
       edGps.style.display = 'flex';
       const latRef = lat >= 0 ? 'N' : 'S';
       const lonRef = lon >= 0 ? 'E' : 'W';
-      gpsChip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px;"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1118 0z"/><circle cx="12" cy="10" r="3"/></svg> ${Math.abs(lat).toFixed(4)}° ${latRef}, ${Math.abs(lon).toFixed(4)}° ${lonRef}`;
+      gpsChip.textContent = `${Math.abs(lat).toFixed(4)}° ${latRef}, ${Math.abs(lon).toFixed(4)}° ${lonRef}`;
       gpsChip.onclick = () => {
         showMapPopup({
           lat: lat,
@@ -1770,16 +1841,20 @@ function show(i, dir = null) {
         });
       };
       if (edAddress) {
-        edAddress.textContent = 'Loading address...';
-        reverseGeocode(lat, lon).then(addr => {
-          if (items[idx]?.path === item.path) {
-            edAddress.textContent = addr;
-          }
-        }).catch(() => {
-          if (items[idx]?.path === item.path) {
-            edAddress.textContent = 'Address unavailable';
-          }
-        });
+        if (reverseGeocodeEnabled) {
+          edAddress.textContent = 'Loading address...';
+          reverseGeocode(lat, lon).then(addr => {
+            if (items[idx]?.path === item.path) {
+              edAddress.textContent = addr;
+            }
+          }).catch(() => {
+            if (items[idx]?.path === item.path) {
+              edAddress.textContent = 'Address unavailable';
+            }
+          });
+        } else {
+          edAddress.textContent = 'Enable address lookup in Settings to resolve this location.';
+        }
       }
     } else {
       edGps.style.display = 'none';
@@ -2407,10 +2482,13 @@ window.renderDuplicateGroup = async () => {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: '0',
   });
   const headerLeft = document.createElement('div');
-  headerLeft.innerHTML = `
-    <div style="font-size: 13px; font-weight: 600; letter-spacing: 0.03em;">Resolve Duplicates</div>
-    <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 2px;">Group ${currentDupGroupIndex + 1} of ${dupGroupsData.length} · ${groupPaths.length} similar images</div>
-  `;
+  const headerTitle = document.createElement('div');
+  headerTitle.textContent = 'Resolve Duplicates';
+  headerTitle.style.cssText = 'font-size: 13px; font-weight: 600; letter-spacing: 0.03em;';
+  const headerMeta = document.createElement('div');
+  headerMeta.textContent = `Group ${currentDupGroupIndex + 1} of ${dupGroupsData.length} · ${groupPaths.length} similar images`;
+  headerMeta.style.cssText = 'font-size: 11px; color: var(--text-tertiary); margin-top: 2px;';
+  headerLeft.append(headerTitle, headerMeta);
   const closeBtn = document.createElement('button');
   closeBtn.className = 'catalog-btn';
   closeBtn.textContent = 'Close';
@@ -2452,10 +2530,14 @@ window.renderDuplicateGroup = async () => {
     
     const info = document.createElement('div');
     info.style.textAlign = 'center';
-    info.innerHTML = `
-      <div style="font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${name.replace(/"/g, '&quot;')}">${name}</div>
-      <div style="font-size: 10px; color: var(--text-tertiary); margin-top: 2px;">${sz}${dims ? ' · ' + dims : ''}</div>
-    `;
+    const infoName = document.createElement('div');
+    infoName.textContent = name;
+    infoName.title = name;
+    infoName.style.cssText = 'font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+    const infoMeta = document.createElement('div');
+    infoMeta.textContent = `${sz}${dims ? ' · ' + dims : ''}`;
+    infoMeta.style.cssText = 'font-size: 10px; color: var(--text-tertiary); margin-top: 2px;';
+    info.append(infoName, infoMeta);
     
     const trashBtn = document.createElement('button');
     trashBtn.className = 'catalog-btn';
@@ -2528,6 +2610,8 @@ window.trashDuplicate = async (path) => {
 catalogNewFolderBtn?.addEventListener('click', () => {
   showNewFolderModal();
 });
+
+catalogFinderBtn?.addEventListener('click', openCurrentFolderInFinder);
 
 catalogCloseBtn?.addEventListener('click', () => {
   toggleCatalogView(false);
@@ -3194,6 +3278,7 @@ function extractDominantColor(imgEl) {
 applyTheme(currentTheme);
 renderRecentFolders();
 listen('menu-open-folder', openFolder);
+listen('menu-open-in-finder', openCurrentFolderInFinder);
 listen('menu-settings', openSettings);
 if (cinematicCheck) cinematicCheck.checked = cinematicEnabled;
 if (themeSelect) themeSelect.value = currentTheme;
@@ -3552,6 +3637,29 @@ function showContextMenu(e, itemPath, itemIndex) {
   menu.style.flexDirection = 'column';
   menu.style.gap = '2px';
   menu.style.minWidth = '140px';
+
+  const finderBtn = document.createElement('div');
+  finderBtn.className = 'context-menu-item finder-item';
+  finderBtn.style.padding = '8px 12px';
+  finderBtn.style.borderRadius = '8px';
+  finderBtn.style.cursor = 'pointer';
+  finderBtn.style.color = 'var(--text-primary)';
+  finderBtn.style.fontSize = '13px';
+  finderBtn.style.display = 'flex';
+  finderBtn.style.alignItems = 'center';
+  finderBtn.style.gap = '8px';
+  finderBtn.style.transition = 'background 0.2s';
+  finderBtn.textContent = 'Show in Finder';
+  finderBtn.addEventListener('mouseenter', () => {
+    finderBtn.style.background = 'rgba(255,255,255,0.08)';
+  });
+  finderBtn.addEventListener('mouseleave', () => {
+    finderBtn.style.background = 'none';
+  });
+  finderBtn.addEventListener('click', () => {
+    menu.remove();
+    openPathInFinder(itemPath, true);
+  });
   
   const deleteBtn = document.createElement('div');
   deleteBtn.className = 'context-menu-item delete-item';
@@ -3564,7 +3672,7 @@ function showContextMenu(e, itemPath, itemIndex) {
   deleteBtn.style.alignItems = 'center';
   deleteBtn.style.gap = '8px';
   deleteBtn.style.transition = 'background 0.2s';
-  deleteBtn.innerHTML = '<span>🗑️</span><span>Delete from Disk</span>';
+  deleteBtn.textContent = 'Move to Trash';
   
   deleteBtn.addEventListener('mouseenter', () => {
     deleteBtn.style.background = 'rgba(255, 107, 107, 0.15)';
@@ -3578,6 +3686,7 @@ function showContextMenu(e, itemPath, itemIndex) {
     showDeleteConfirmation(itemPath, itemIndex);
   });
   
+  menu.appendChild(finderBtn);
   menu.appendChild(deleteBtn);
   document.body.appendChild(menu);
   
@@ -3621,13 +3730,13 @@ function showDeleteConfirmation(itemPath, itemIndex) {
   dialog.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
   
   const title = document.createElement('h3');
-  title.textContent = 'Delete File Permanently?';
+  title.textContent = 'Move File to Trash?';
   title.style.color = '#fff';
   title.style.fontSize = '17px';
   title.style.margin = '0 0 10px 0';
   
   const desc = document.createElement('p');
-  desc.textContent = `This will permanently delete "${itemPath.split('/').pop()}" from your storage. This action cannot be undone.`;
+  desc.textContent = `This will move "${itemPath.split('/').pop()}" to the system Trash.`;
   desc.style.color = 'rgba(255,255,255,0.6)';
   desc.style.fontSize = '13px';
   desc.style.lineHeight = '1.5';
@@ -3652,7 +3761,7 @@ function showDeleteConfirmation(itemPath, itemIndex) {
   cancelBtn.addEventListener('mouseleave', () => cancelBtn.style.background = 'rgba(255,255,255,0.05)');
   
   const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = 'Delete';
+  deleteBtn.textContent = 'Move to Trash';
   deleteBtn.style.padding = '8px 16px';
   deleteBtn.style.borderRadius = '8px';
   deleteBtn.style.border = 'none';
@@ -3674,7 +3783,7 @@ function showDeleteConfirmation(itemPath, itemIndex) {
   deleteBtn.addEventListener('click', async () => {
     try {
       await invoke('delete_physical_file', { path: itemPath });
-      showToast('File deleted permanently');
+      showToast('File moved to Trash');
       
       items = items.filter(it => it.path !== itemPath);
       
@@ -3691,7 +3800,7 @@ function showDeleteConfirmation(itemPath, itemIndex) {
         }
       }
     } catch (e) {
-      showToast('Failed to delete file');
+      showToast('Failed to move file to Trash');
     }
     closeModal();
   });
@@ -4388,7 +4497,7 @@ function showMapPopup(geodata) {
           if (addressEl && addressEl.textContent === 'Loading address...') {
             const latLng = popup.getLatLng();
             const address = await window.parent.reverseGeocode(latLng.lat, latLng.lng);
-            addressEl.innerHTML = \`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> \${address}\`;
+            addressEl.textContent = address;
           }
         });
 
@@ -4542,15 +4651,16 @@ batchTagInput?.addEventListener('keydown', async (e) => {
     if (!tagName) return;
     
     if (selectedCatalogPaths.size > 0) {
-      for (const path of selectedCatalogPaths) {
-        await invoke('add_tag_to_image', { path, tagName, tagColor: '#D4A72C' });
+      const paths = Array.from(selectedCatalogPaths);
+      const result = await invoke('batch_add_tag', { paths, tagName, tagColor: '#D4A72C' });
+      for (const path of paths) {
         const existing = folderTagsCache.get(path) || [];
         if (!existing.some(t => t.name === tagName)) {
-          existing.push({ name: tagName });
+          existing.push({ name: tagName, color: '#D4A72C' });
           folderTagsCache.set(path, existing);
         }
       }
-      showToast(`Added tag "${tagName}" to ${selectedCatalogPaths.size} items`);
+      showToast(`Added tag "${tagName}" to ${result.success} items` + (result.failed > 0 ? ` (${result.failed} failed)` : ''));
       e.target.value = '';
       await renderTagFilters();
       applyFilters();
@@ -4560,18 +4670,13 @@ batchTagInput?.addEventListener('keydown', async (e) => {
 
 batchTrashBtn?.addEventListener('click', async () => {
   if (selectedCatalogPaths.size > 0) {
-    if (confirm(`Permanently trash ${selectedCatalogPaths.size} selected items?`)) {
+    if (confirm(`Move ${selectedCatalogPaths.size} selected items to Trash?`)) {
       playUISound('delete');
-      let failed = 0;
-      for (const path of selectedCatalogPaths) {
-        try {
-          await invoke('delete_physical_file', { path });
-          items = items.filter(it => it.path !== path);
-        } catch(err) {
-          failed++;
-        }
-      }
-      showToast(`Trashed ${selectedCatalogPaths.size - failed} items` + (failed > 0 ? ` (${failed} failed)` : ''));
+      const paths = Array.from(selectedCatalogPaths);
+      const result = await invoke('batch_trash_files', { paths });
+      const trashed = new Set(paths);
+      items = items.filter(it => !trashed.has(it.path));
+      showToast(`Moved ${result.success} items to Trash` + (result.failed > 0 ? ` (${result.failed} failed)` : ''));
       selectedCatalogPaths.clear();
       updateCatalogSelectionState();
       buildCatalogContent();
@@ -4673,22 +4778,17 @@ batchScrubBtn?.addEventListener('click', async () => {
   }
 
   showToast(`Scrubbing metadata for ${paths.length} files...`);
-  let success = 0;
-  let failed = 0;
-
-  for (const path of paths) {
-    try {
-      await invoke('scrub_exif_metadata', { path });
-      success++;
-    } catch (err) {
-      console.error(`Failed to scrub EXIF for ${path}:`, err);
-      failed++;
-    }
+  let result;
+  try {
+    result = await invoke('batch_scrub_exif', { paths });
+  } catch (err) {
+    showToast(`EXIF scrub failed: ${err}`);
+    return;
   }
 
-  showToast(`EXIF Scrubber: ${success} stripped successfully` + (failed > 0 ? `, ${failed} failed` : ''));
+  showToast(`EXIF Scrubber: ${result.success} stripped successfully` + (result.failed > 0 ? `, ${result.failed} failed` : ''));
   
-  if (success > 0) {
+  if (result.success > 0) {
     try {
       const oldPath = items[idx]?.path;
       items = processLoadedItems(await invoke('get_folder_items'));
@@ -4720,4 +4820,3 @@ window.onerror = function(message, source, lineno, colno, error) {
   });
   return false;
 };
-

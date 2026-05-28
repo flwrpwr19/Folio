@@ -51,15 +51,12 @@ pub fn supported_image_extensions() -> &'static [&'static str] {
         // Browser-native (image crate handles these fine)
         "jpg", "jpeg", "png", "webp", "avif", "gif", "bmp",
         // TIFF — image crate handles basic TIFFs; exotic photometrics fall back to sips
-        "tif", "tiff",
-        // RAW formats — all handled via sips on macOS
-        "raf", "nef", "nrw", "arw", "srf", "sr2", "cr2", "cr3", "crw",
-        "orf", "rw2", "pef", "dng", "raw", "rwl", "mrw", "erf", "mos",
-        "iiq", "3fr", "fff", "srw", "axr", "dcr", "dxo", "nefx",
+        "tif", "tiff", // RAW formats — all handled via sips on macOS
+        "raf", "nef", "nrw", "arw", "srf", "sr2", "cr2", "cr3", "crw", "orf", "rw2", "pef", "dng",
+        "raw", "rwl", "mrw", "erf", "mos", "iiq", "3fr", "fff", "srw", "axr", "dcr", "dxo", "nefx",
         // Other formats sips can read
-        "heic", "heif", "heics", "avci",
-        "exr", "psd", "jxl", "jp2",
-        "svg", "pic", "sgi", "tga", "mpo",
+        "heic", "heif", "heics", "avci", "exr", "psd", "jxl", "jp2", "svg", "pic", "sgi", "tga",
+        "mpo",
     ]
 }
 
@@ -112,11 +109,15 @@ pub fn scan_supported_images(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Formats the `image` crate can decode natively without sips.
 fn image_crate_native(ext: &str) -> bool {
-    matches!(ext, "jpg" | "jpeg" | "png" | "webp" | "avif" | "gif" | "bmp")
+    matches!(
+        ext,
+        "jpg" | "jpeg" | "png" | "webp" | "avif" | "gif" | "bmp"
+    )
 }
 
 pub fn needs_sips_decode(path: &Path) -> bool {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
@@ -129,7 +130,8 @@ pub fn needs_sips_decode(path: &Path) -> bool {
 pub fn can_use_sips(path: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(std::ffi::OsStr::to_str)
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
@@ -141,14 +143,19 @@ pub fn can_use_sips(path: &Path) -> bool {
     }
 }
 
-/// Resize any image via macOS `sips` directly to a file. 
+/// Resize any image via macOS `sips` directly to a file.
 /// Used for high-performance thumbnailing and full-size decoding.
 #[cfg(target_os = "macos")]
-pub fn sips_output_to_file(path: &Path, dest: &Path, max_side: Option<u32>, format: &str) -> Result<()> {
+pub fn sips_output_to_file(
+    path: &Path,
+    dest: &Path,
+    max_side: Option<u32>,
+    format: &str,
+) -> Result<()> {
     use std::process::Command;
     let mut cmd = Command::new("sips");
     cmd.arg("-s").arg("format").arg(format);
-    
+
     if format == "jpeg" {
         cmd.arg("-s").arg("formatOptions").arg("95");
     }
@@ -157,11 +164,11 @@ pub fn sips_output_to_file(path: &Path, dest: &Path, max_side: Option<u32>, form
         cmd.arg("-Z").arg(max_side.to_string());
     }
 
-    cmd.arg(path)
-       .arg("--out")
-       .arg(dest);
+    cmd.arg(path).arg("--out").arg(dest);
 
-    let output = cmd.output().with_context(|| format!("sips failed for {}", path.display()))?;
+    let output = cmd
+        .output()
+        .with_context(|| format!("sips failed for {}", path.display()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -171,7 +178,12 @@ pub fn sips_output_to_file(path: &Path, dest: &Path, max_side: Option<u32>, form
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn sips_output_to_file(_path: &Path, _dest: &Path, _max_side: Option<u32>, _format: &str) -> Result<()> {
+pub fn sips_output_to_file(
+    _path: &Path,
+    _dest: &Path,
+    _max_side: Option<u32>,
+    _format: &str,
+) -> Result<()> {
     anyhow::bail!("sips is only available on macOS")
 }
 
@@ -239,15 +251,25 @@ pub fn sips_get_dimensions(path: &Path) -> Result<(u32, u32)> {
 
     for line in stdout.lines() {
         if line.contains("pixelWidth:") {
-            w = line.split(':').last().and_then(|s| s.trim().parse().ok());
+            w = line
+                .split(':')
+                .next_back()
+                .and_then(|s| s.trim().parse().ok());
         } else if line.contains("pixelHeight:") {
-            h = line.split(':').last().and_then(|s| s.trim().parse().ok());
+            h = line
+                .split(':')
+                .next_back()
+                .and_then(|s| s.trim().parse().ok());
         }
     }
 
     match (w, h) {
         (Some(w), Some(h)) => Ok((w, h)),
-        _ => anyhow::bail!("failed to parse sips output for {}: {}", path.display(), stdout),
+        _ => anyhow::bail!(
+            "failed to parse sips output for {}: {}",
+            path.display(),
+            stdout
+        ),
     }
 }
 
@@ -258,7 +280,8 @@ pub fn sips_get_dimensions(_path: &Path) -> Result<(u32, u32)> {
 
 /// Open an image, falling back to sips for formats the image crate can't handle.
 pub fn open_image(path: &Path) -> Result<DynamicImage> {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
@@ -268,7 +291,8 @@ pub fn open_image(path: &Path) -> Result<DynamicImage> {
             .with_context(|| format!("failed to open image file: {}", path.display()))?
             .with_guessed_format()
             .with_context(|| format!("failed to guess format: {}", path.display()))?;
-        return reader.decode()
+        return reader
+            .decode()
             .with_context(|| format!("failed to decode image: {}", path.display()));
     }
 
@@ -276,7 +300,7 @@ pub fn open_image(path: &Path) -> Result<DynamicImage> {
     // The image crate's TIFF decoder often reads thumbnail IFDs or fails on 16-bit/exotic photometrics.
     #[cfg(target_os = "macos")]
     {
-        return sips_decode(path);
+        sips_decode(path)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -303,23 +327,29 @@ pub fn get_video_dimensions_macos(path: &Path) -> Option<(u32, u32)> {
         .arg(path)
         .output()
         .ok()?;
-        
+
     if !output.status.success() {
         return None;
     }
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut w = None;
     let mut h = None;
-    
+
     for line in stdout.lines() {
         if line.contains("kMDItemPixelWidth") {
-            w = line.split('=').last().and_then(|s| s.trim().parse().ok());
+            w = line
+                .split('=')
+                .next_back()
+                .and_then(|s| s.trim().parse().ok());
         } else if line.contains("kMDItemPixelHeight") {
-            h = line.split('=').last().and_then(|s| s.trim().parse().ok());
+            h = line
+                .split('=')
+                .next_back()
+                .and_then(|s| s.trim().parse().ok());
         }
     }
-    
+
     match (w, h) {
         (Some(w), Some(h)) => Some((w, h)),
         _ => None,
@@ -353,7 +383,8 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
         return Err(MediaError::Unsupported(path.to_path_buf()).into());
     }
 
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(std::ffi::OsStr::to_str)
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
@@ -366,7 +397,8 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
             .with_guessed_format()
             .with_context(|| format!("failed to guess format: {}", path.display()))?;
         let fmt = reader.format();
-        let (w, h) = reader.into_dimensions()
+        let (w, h) = reader
+            .into_dimensions()
             .with_context(|| format!("failed to read dimensions: {}", path.display()))?;
         (w, h, fmt)
     } else {
@@ -420,11 +452,19 @@ pub fn decode_image(path: &Path, max_side: Option<u32>) -> Result<DecodedImage> 
 
     let rgba8 = img.to_rgba8();
     let (width, height) = img.dimensions();
-    Ok(DecodedImage { width, height, rgba: rgba8.into_vec() })
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba: rgba8.into_vec(),
+    })
 }
 
 /// Decode image with a pre-known orientation value, skipping EXIF re-read.
-pub fn decode_image_with_orientation(path: &Path, max_side: Option<u32>, orientation: u16) -> Result<DecodedImage> {
+pub fn decode_image_with_orientation(
+    path: &Path,
+    max_side: Option<u32>,
+    orientation: u16,
+) -> Result<DecodedImage> {
     let mut img = open_image(path)?;
     img = apply_orientation(img, orientation);
 
@@ -434,7 +474,11 @@ pub fn decode_image_with_orientation(path: &Path, max_side: Option<u32>, orienta
 
     let rgba8 = img.to_rgba8();
     let (width, height) = img.dimensions();
-    Ok(DecodedImage { width, height, rgba: rgba8.into_vec() })
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba: rgba8.into_vec(),
+    })
 }
 
 fn downscale_if_needed(image: DynamicImage, max_side: u32) -> DynamicImage {
@@ -456,17 +500,20 @@ fn downscale_if_needed(image: DynamicImage, max_side: u32) -> DynamicImage {
         None => return image.resize(target_w, target_h, image::imageops::FilterType::Lanczos3),
     };
 
-    let mut dst_image = fast_image_resize::images::Image::new(
-        target_w,
-        target_h,
-        pixel_type,
-    );
+    let mut dst_image = fast_image_resize::images::Image::new(target_w, target_h, pixel_type);
 
     let mut resizer = fast_image_resize::Resizer::new();
-    let mut options = fast_image_resize::ResizeOptions::default();
-    options.algorithm = fast_image_resize::ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3);
+    let options = fast_image_resize::ResizeOptions {
+        algorithm: fast_image_resize::ResizeAlg::Convolution(
+            fast_image_resize::FilterType::Lanczos3,
+        ),
+        ..Default::default()
+    };
 
-    if resizer.resize(src_view, &mut dst_image, Some(&options)).is_ok() {
+    if resizer
+        .resize(src_view, &mut dst_image, Some(&options))
+        .is_ok()
+    {
         let buffer = dst_image.into_vec();
         match pixel_type {
             fast_image_resize::PixelType::U8x4 => {
@@ -489,7 +536,6 @@ fn downscale_if_needed(image: DynamicImage, max_side: u32) -> DynamicImage {
     }
 
     image.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
-
 }
 
 fn read_exif_orientation(path: &Path) -> Result<u16> {
@@ -514,11 +560,11 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
     let camera = exif
         .get_field(Tag::Model, In::PRIMARY)
         .map(|f| f.display_value().with_unit(&exif).to_string());
-    
+
     let aperture = exif
         .get_field(Tag::FNumber, In::PRIMARY)
         .map(|f| f.display_value().with_unit(&exif).to_string());
-    
+
     let shutter_speed = exif
         .get_field(Tag::ExposureTime, In::PRIMARY)
         .map(|f| f.display_value().with_unit(&exif).to_string());
@@ -535,7 +581,7 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
         let field = exif.get_field(tag, In::PRIMARY)?;
         let ref_field = exif.get_field(ref_tag, In::PRIMARY)?;
         let ref_val = ref_field.display_value().to_string();
-        
+
         if let exif::Value::Rational(rationals) = &field.value {
             if rationals.len() >= 3 {
                 let d = rationals[0].num as f64 / rationals[0].denom.max(1) as f64;
@@ -558,8 +604,14 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
     let latitude = parse_gps_coord(Tag::GPSLatitude, Tag::GPSLatitudeRef);
     let longitude = parse_gps_coord(Tag::GPSLongitude, Tag::GPSLongitudeRef);
 
-    let has_exif = camera.is_some() || aperture.is_some() || shutter_speed.is_some() || iso.is_some() || focal_length.is_some() || latitude.is_some() || longitude.is_some();
-    
+    let has_exif = camera.is_some()
+        || aperture.is_some()
+        || shutter_speed.is_some()
+        || iso.is_some()
+        || focal_length.is_some()
+        || latitude.is_some()
+        || longitude.is_some();
+
     let exif_data = if has_exif {
         Some(ExifData {
             camera,
@@ -605,22 +657,23 @@ pub fn apply_orientation(image: DynamicImage, orientation: u16) -> DynamicImage 
 pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> {
     let small = img.resize_exact(32, 32, image::imageops::FilterType::Nearest);
     let rgb = small.to_rgb8();
-    
-    let pixels: Vec<[f32; 3]> = rgb.pixels().map(|p| {
-        [p[0] as f32, p[1] as f32, p[2] as f32]
-    }).collect();
-    
+
+    let pixels: Vec<[f32; 3]> = rgb
+        .pixels()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .collect();
+
     if pixels.is_empty() {
         return vec!["#000000".to_string(); count];
     }
-    
+
     // k-means++ initialization
     let mut centroids = Vec::with_capacity(count);
     let mut distances = vec![f32::MAX; pixels.len()];
-    
+
     // First centroid: random-ish pick (use first pixel for determinism)
     centroids.push(pixels[0]);
-    
+
     for _ in 1..count {
         // Update distances to nearest centroid
         let last = &centroids[centroids.len() - 1];
@@ -632,7 +685,7 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
             distances[i] = distances[i].min(dist);
             total += distances[i];
         }
-        
+
         // Pick next centroid with probability proportional to distance²
         if total <= 0.0 {
             centroids.push(pixels[pixels.len() / 2]);
@@ -650,15 +703,15 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
             centroids.push(pixels[chosen]);
         }
     }
-    
+
     let mut assignments = vec![0; pixels.len()];
     let mut cluster_sums = vec![[0.0f32; 3]; count];
     let mut cluster_counts = vec![0; count];
-    
+
     for _ in 0..10 {
         cluster_sums.fill([0.0, 0.0, 0.0]);
         cluster_counts.fill(0);
-        
+
         for (p_idx, &pixel) in pixels.iter().enumerate() {
             let mut best_centroid = 0;
             let mut best_dist = f32::MAX;
@@ -677,7 +730,7 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
             cluster_sums[best_centroid][2] += pixel[2];
             cluster_counts[best_centroid] += 1;
         }
-        
+
         let mut converged = true;
         for c_idx in 0..count {
             let len = cluster_counts[c_idx] as f32;
@@ -700,7 +753,7 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
             break;
         }
     }
-    
+
     let mut hex_colors = Vec::new();
     for centroid in centroids {
         let r = centroid[0].clamp(0.0, 255.0) as u8;
@@ -708,7 +761,7 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
         let b = centroid[2].clamp(0.0, 255.0) as u8;
         hex_colors.push(format!("#{:02x}{:02x}{:02x}", r, g, b));
     }
-    
+
     hex_colors.sort();
     hex_colors.dedup();
     while hex_colors.len() < count {
@@ -718,7 +771,9 @@ pub fn extract_dominant_colors(img: &DynamicImage, count: usize) -> Vec<String> 
     hex_colors
 }
 
-pub fn compute_histogram_from_image(img: &image::DynamicImage) -> ([u32; 256], [u32; 256], [u32; 256], [u32; 256]) {
+pub fn compute_histogram_from_image(
+    img: &image::DynamicImage,
+) -> ([u32; 256], [u32; 256], [u32; 256], [u32; 256]) {
     let mut r = [0u32; 256];
     let mut g = [0u32; 256];
     let mut b = [0u32; 256];
@@ -732,7 +787,8 @@ pub fn compute_histogram_from_image(img: &image::DynamicImage) -> ([u32; 256], [
             r[pr] += 1;
             g[pg] += 1;
             b[pb] += 1;
-            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32)
+                as usize;
             lum[l.min(255)] += 1;
         }
     } else if let Some(rgba) = img.as_rgba8() {
@@ -743,7 +799,8 @@ pub fn compute_histogram_from_image(img: &image::DynamicImage) -> ([u32; 256], [
             r[pr] += 1;
             g[pg] += 1;
             b[pb] += 1;
-            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32)
+                as usize;
             lum[l.min(255)] += 1;
         }
     } else {
@@ -755,7 +812,8 @@ pub fn compute_histogram_from_image(img: &image::DynamicImage) -> ([u32; 256], [
             r[pr] += 1;
             g[pg] += 1;
             b[pb] += 1;
-            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32) as usize;
+            let l = (0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32)
+                as usize;
             lum[l.min(255)] += 1;
         }
     }
@@ -769,33 +827,33 @@ pub fn detect_focus_blur(img: &DynamicImage) -> f64 {
     } else {
         img.clone()
     };
-    
+
     let gray = scaled.to_luma8();
     let width = gray.width() as usize;
     let height = gray.height() as usize;
-    
+
     if width < 3 || height < 3 {
         return 0.0;
     }
-    
+
     let raw = gray.as_raw();
     let mut sum = 0.0;
     let mut count = 0;
-    
+
     let mut laplacians = Vec::with_capacity((width - 2) * (height - 2));
-    
+
     for y in 1..(height - 1) {
         let prev_idx = (y - 1) * width;
         let curr_idx = y * width;
         let next_idx = (y + 1) * width;
-        
+
         for x in 1..(width - 1) {
             let p_top = raw[prev_idx + x] as i32;
             let p_left = raw[curr_idx + x - 1] as i32;
             let p_center = raw[curr_idx + x] as i32;
             let p_right = raw[curr_idx + x + 1] as i32;
             let p_bottom = raw[next_idx + x] as i32;
-            
+
             let lap = p_top + p_left - 4 * p_center + p_right + p_bottom;
             let lap_f = lap as f64;
             sum += lap_f;
@@ -803,19 +861,19 @@ pub fn detect_focus_blur(img: &DynamicImage) -> f64 {
             count += 1;
         }
     }
-    
+
     if count == 0 {
         return 0.0;
     }
-    
+
     let mean = sum / (count as f64);
     let mut variance_sum = 0.0;
-    
+
     for &lap in &laplacians {
         let diff = lap - mean;
         variance_sum += diff * diff;
     }
-    
+
     variance_sum / (count as f64)
 }
 

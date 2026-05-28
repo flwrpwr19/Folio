@@ -1,7 +1,9 @@
 use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 
-fn default_one() -> f32 { 1.0 }
+fn default_one() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimpleEdit {
@@ -89,19 +91,24 @@ pub fn apply_edit(image: &DynamicImage, edit: &SimpleEdit) -> DynamicImage {
     if edit.vibrance != 0.0 {
         let mut rgba = img.to_rgba8();
         let sat = edit.vibrance / 100.0;
-        
+
         for px in rgba.pixels_mut() {
             let [r8, g8, b8, a8] = px.0;
             let r = r8 as f32 / 255.0;
             let g = g8 as f32 / 255.0;
             let b = b8 as f32 / 255.0;
-            
+
             let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
             let nr = (lum + (r - lum) * (1.0 + sat)).clamp(0.0, 1.0);
             let ng = (lum + (g - lum) * (1.0 + sat)).clamp(0.0, 1.0);
             let nb = (lum + (b - lum) * (1.0 + sat)).clamp(0.0, 1.0);
-            
-            px.0 = [(nr * 255.0) as u8, (ng * 255.0) as u8, (nb * 255.0) as u8, a8];
+
+            px.0 = [
+                (nr * 255.0) as u8,
+                (ng * 255.0) as u8,
+                (nb * 255.0) as u8,
+                a8,
+            ];
         }
         img = DynamicImage::ImageRgba8(rgba);
     }
@@ -114,7 +121,7 @@ pub fn apply_edit(image: &DynamicImage, edit: &SimpleEdit) -> DynamicImage {
         let cy = (edit.crop_y * h as f32).round() as u32;
         let cw = (edit.crop_w * w as f32).round() as u32;
         let ch = (edit.crop_h * h as f32).round() as u32;
-        
+
         let cx = cx.min(w);
         let cy = cy.min(h);
         let cw = cw.min(w - cx).max(1);

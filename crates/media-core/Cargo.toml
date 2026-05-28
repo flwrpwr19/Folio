@@ -15,6 +15,4 @@ kamadak-exif.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true
-memmap2.workspace = true
 fast_image_resize.workspace = true
-

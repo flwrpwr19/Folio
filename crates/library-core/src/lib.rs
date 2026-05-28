@@ -1,14 +1,16 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
 
-pub use rusqlite;
 use anyhow::{Context, Result};
-use media_core::{ImageMetadata, decode_image, is_video_path, read_metadata, scan_supported_images};
-use rusqlite::OptionalExtension;
+use media_core::{
+    ImageMetadata, decode_image, is_video_path, read_metadata, scan_supported_images,
+};
 use r2d2::{Pool, PooledConnection};
 use rayon::prelude::*;
+pub use rusqlite;
+use rusqlite::OptionalExtension;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -37,7 +39,7 @@ impl r2d2::ManageConnection for SharedMemoryConnectionManager {
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-64000;
-             PRAGMA temp_store=MEMORY;"
+             PRAGMA temp_store=MEMORY;",
         );
         Ok(conn)
     }
@@ -74,7 +76,7 @@ pub fn u8_vec_to_u32_vec(bytes: &[u8]) -> [u32; 256] {
     let mut arr = [0u32; 256];
     if bytes.len() == 1024 {
         for i in 0..256 {
-            let chunk = &bytes[i*4 .. (i+1)*4];
+            let chunk = &bytes[i * 4..(i + 1) * 4];
             arr[i] = u32::from_le_bytes(chunk.try_into().unwrap_or([0; 4]));
         }
     }
@@ -110,11 +112,14 @@ static INDEX_THREAD_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
 fn get_index_thread_pool() -> &'static rayon::ThreadPool {
     INDEX_THREAD_POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
+        match rayon::ThreadPoolBuilder::new()
             .num_threads(8)
             .thread_name(|idx| format!("folio-index-{}", idx))
             .build()
-            .unwrap()
+        {
+            Ok(pool) => pool,
+            Err(e) => panic!("failed to build Folio index thread pool: {e}"),
+        }
     })
 }
 
@@ -122,7 +127,7 @@ fn get_index_thread_pool() -> &'static rayon::ThreadPool {
 pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
     let paths = scan_supported_images(root)?;
     let pool = get_index_thread_pool();
-    
+
     let items: Vec<LibraryItem> = pool.install(|| {
         paths
             .par_iter()
@@ -141,7 +146,8 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
                 }?;
                 let file_meta = fs::metadata(path).ok();
                 let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = file_meta.as_ref()
+                let modified = file_meta
+                    .as_ref()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
@@ -175,6 +181,8 @@ pub struct LibraryCache {
     pub shutdown: Arc<std::sync::atomic::AtomicBool>,
 }
 
+pub type VisualHistogram = ([u32; 256], [u32; 256], [u32; 256], [u32; 256]);
+
 struct FileDropGuard {
     path: PathBuf,
 }
@@ -198,7 +206,7 @@ impl LibraryCache {
         let decoded_dir = root.join("decoded");
         fs::create_dir_all(&decoded_dir)?;
         let temp_dir = root.join("temp");
-        
+
         // Clean up temp directory from prior crashes on startup
         if temp_dir.exists() {
             let _ = fs::remove_dir_all(&temp_dir);
@@ -210,7 +218,7 @@ impl LibraryCache {
         disk_conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
-             PRAGMA auto_vacuum=INCREMENTAL;"
+             PRAGMA auto_vacuum=INCREMENTAL;",
         )?;
 
         // Open transient shared in-memory connection
@@ -252,7 +260,9 @@ impl LibraryCache {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
                     while let Ok(req) = rx.recv_timeout(std::time::Duration::from_millis(1)) {
                         batch.push(req);
-                        if std::time::Instant::now() >= deadline || batch.len() >= 64 { break; }
+                        if std::time::Instant::now() >= deadline || batch.len() >= 64 {
+                            break;
+                        }
                     }
 
                     let tx = match conn.transaction() {
@@ -264,7 +274,15 @@ impl LibraryCache {
                             Ok(s) => s,
                             Err(_) => continue,
                         };
-                        let (camera, aperture, shutter_speed, iso, focal_length, latitude, longitude) = match &req.metadata.exif {
+                        let (
+                            camera,
+                            aperture,
+                            shutter_speed,
+                            iso,
+                            focal_length,
+                            latitude,
+                            longitude,
+                        ) = match &req.metadata.exif {
                             Some(e) => (
                                 e.camera.clone(),
                                 e.aperture.clone(),
@@ -348,13 +366,20 @@ impl LibraryCache {
         let in_mem_uri_str_flush = in_mem_uri.to_string();
         let shutdown_clone_flush = Arc::clone(&shutdown);
         std::thread::spawn(move || {
-            let mem_conn = match rusqlite::Connection::open_with_flags(&in_mem_uri_str_flush, flags) {
+            let mem_conn = match rusqlite::Connection::open_with_flags(&in_mem_uri_str_flush, flags)
+            {
                 Ok(c) => c,
-                Err(e) => { eprintln!("Flush thread: failed to open memory connection: {e:?}"); return; }
+                Err(e) => {
+                    eprintln!("Flush thread: failed to open memory connection: {e:?}");
+                    return;
+                }
             };
             let mut disk_conn = match rusqlite::Connection::open(&db_path_clone) {
                 Ok(c) => c,
-                Err(e) => { eprintln!("Flush thread: failed to open disk connection: {e:?}"); return; }
+                Err(e) => {
+                    eprintln!("Flush thread: failed to open disk connection: {e:?}");
+                    return;
+                }
             };
             while !shutdown_clone_flush.load(std::sync::atomic::Ordering::SeqCst) {
                 for _ in 0..10 {
@@ -363,13 +388,21 @@ impl LibraryCache {
                         return;
                     }
                 }
-                if flush_pending_clone.compare_exchange(true, false, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
+                if flush_pending_clone
+                    .compare_exchange(
+                        true,
+                        false,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
                     if let Err(e) = copy_db(&mem_conn, &mut disk_conn) {
                         eprintln!("Background DB flush failed: {e:?}");
                     } else {
                         let _ = disk_conn.execute_batch(
                             "PRAGMA wal_checkpoint(PASSIVE);
-                             PRAGMA incremental_vacuum(50);"
+                             PRAGMA incremental_vacuum(50);",
                         );
                     }
                 }
@@ -381,10 +414,14 @@ impl LibraryCache {
         let in_mem_uri_str_backup = in_mem_uri.to_string();
         let shutdown_clone_backup = Arc::clone(&shutdown);
         std::thread::spawn(move || {
-            let mem_conn = match rusqlite::Connection::open_with_flags(&in_mem_uri_str_backup, flags) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Backup thread: failed to open memory connection: {e:?}"); return; }
-            };
+            let mem_conn =
+                match rusqlite::Connection::open_with_flags(&in_mem_uri_str_backup, flags) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Backup thread: failed to open memory connection: {e:?}");
+                        return;
+                    }
+                };
             while !shutdown_clone_backup.load(std::sync::atomic::Ordering::SeqCst) {
                 let mut exited = false;
                 for _ in 0..3000 {
@@ -399,7 +436,7 @@ impl LibraryCache {
                 }
                 let backup_path = db_path_backup.with_extension("sqlite3.bak");
                 let mut backup_conn_res = rusqlite::Connection::open(&backup_path);
-                
+
                 match &mut backup_conn_res {
                     Ok(backup_conn) => {
                         if let Err(e) = copy_db(&mem_conn, backup_conn) {
@@ -426,18 +463,21 @@ impl LibraryCache {
             let now = std::time::SystemTime::now();
             let max_age = std::time::Duration::from_secs(30 * 24 * 60 * 60);
             if thumb_dir_clone.exists() {
-                for entry in walkdir::WalkDir::new(&thumb_dir_clone).into_iter().filter_map(|e| e.ok()) {
+                for entry in walkdir::WalkDir::new(&thumb_dir_clone)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
                     let path = entry.path().to_path_buf();
-                    if path.is_file() {
-                        if let Ok(meta) = fs::metadata(&path) {
-                            let accessed = meta.accessed().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                            let last_used = accessed.max(modified);
-                            if let Ok(age) = now.duration_since(last_used) {
-                                if age > max_age {
-                                    let _ = fs::remove_file(&path);
-                                }
-                            }
+                    if path.is_file()
+                        && let Ok(meta) = fs::metadata(&path)
+                    {
+                        let accessed = meta.accessed().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        let last_used = accessed.max(modified);
+                        if let Ok(age) = now.duration_since(last_used)
+                            && age > max_age
+                        {
+                            let _ = fs::remove_file(&path);
                         }
                     }
                 }
@@ -448,7 +488,9 @@ impl LibraryCache {
     }
 
     pub fn conn(&self) -> Result<PooledConnection<SharedMemoryConnectionManager>> {
-        self.pool.get().context("failed to get database connection from pool")
+        self.pool
+            .get()
+            .context("failed to get database connection from pool")
     }
 
     pub fn thumb_dir(&self) -> &Path {
@@ -460,14 +502,15 @@ impl LibraryCache {
     }
 
     pub fn schedule_flush(&self) {
-        self.flush_pending.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.flush_pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn ensure_schema(&self) -> Result<()> {
         let conn = self.conn()?;
-        
+
         let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        
+
         if current_version < 1 {
             conn.execute_batch(
                 r#"
@@ -511,7 +554,7 @@ impl LibraryCache {
             )?;
             conn.execute("PRAGMA user_version = 1;", [])?;
         }
-        
+
         let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if current_version < 2 {
             let table_info: Vec<String> = {
@@ -519,7 +562,7 @@ impl LibraryCache {
                 let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
                 rows.collect::<Result<Vec<_>, _>>()?
             };
-            
+
             let columns_to_add = [
                 ("latitude", "REAL"),
                 ("longitude", "REAL"),
@@ -529,10 +572,13 @@ impl LibraryCache {
                 ("iso", "TEXT"),
                 ("focal_length", "TEXT"),
             ];
-            
+
             for (col_name, col_type) in &columns_to_add {
                 if !table_info.contains(&col_name.to_string()) {
-                    let query = format!("ALTER TABLE image_metadata ADD COLUMN {} {};", col_name, col_type);
+                    let query = format!(
+                        "ALTER TABLE image_metadata ADD COLUMN {} {};",
+                        col_name, col_type
+                    );
                     let _ = conn.execute(&query, []);
                 }
             }
@@ -563,11 +609,14 @@ impl LibraryCache {
                 rows.collect::<Result<Vec<_>, _>>()?
             };
             if !table_info.contains(&"focus_score".to_string()) {
-                let _ = conn.execute("ALTER TABLE image_metadata ADD COLUMN focus_score REAL;", []);
+                let _ = conn.execute(
+                    "ALTER TABLE image_metadata ADD COLUMN focus_score REAL;",
+                    [],
+                );
             }
             conn.execute("PRAGMA user_version = 4;", [])?;
         }
-        
+
         Ok(())
     }
 
@@ -580,7 +629,6 @@ impl LibraryCache {
         self.schedule_flush();
         Ok(())
     }
-
 
     pub fn cached_metadata(&self, path: &Path) -> Result<Option<ImageMetadata>> {
         let modified = modified_secs(path)?;
@@ -613,15 +661,36 @@ impl LibraryCache {
             )
             .optional()?;
 
-        let Some((width, height, orientation, format_name, cached_modified, camera, aperture, shutter_speed, iso, focal_length, latitude, longitude, focus_score)) = row else {
+        let Some((
+            width,
+            height,
+            orientation,
+            format_name,
+            cached_modified,
+            camera,
+            aperture,
+            shutter_speed,
+            iso,
+            focal_length,
+            latitude,
+            longitude,
+            focus_score,
+        )) = row
+        else {
             return Ok(None);
         };
         if cached_modified != modified {
             return Ok(None);
         }
         let format = format_name.as_deref().and_then(parse_image_format);
-        
-        let has_exif = camera.is_some() || aperture.is_some() || shutter_speed.is_some() || iso.is_some() || focal_length.is_some() || latitude.is_some() || longitude.is_some();
+
+        let has_exif = camera.is_some()
+            || aperture.is_some()
+            || shutter_speed.is_some()
+            || iso.is_some()
+            || focal_length.is_some()
+            || latitude.is_some()
+            || longitude.is_some();
         let exif = if has_exif {
             Some(media_core::ExifData {
                 camera,
@@ -670,26 +739,40 @@ impl LibraryCache {
                     .arg(temp_dir)
                     .arg(path)
                     .output();
-                
-                if let Ok(out) = output {
-                    if out.status.success() {
-                        let filename = path.file_name().ok_or_else(|| anyhow::anyhow!("no filename for video"))?;
-                        let generated_png = temp_dir.join(format!("{}.png", filename.to_string_lossy()));
-                        if generated_png.exists() {
-                            let _guard = FileDropGuard { path: generated_png.clone() };
-                            let img = image::open(&generated_png)
-                                .with_context(|| format!("failed to open generated video frame at {}", generated_png.display()))?;
-                            let mut file = std::fs::File::create(&tmp_path)
-                                .with_context(|| format!("failed to create temp file at {}", tmp_path.display()))?;
-                            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
-                            image::DynamicImage::ImageRgba8(img.to_rgba8())
-                                .write_with_encoder(encoder)
-                                .with_context(|| format!("failed to write jpeg to {}", tmp_path.display()))?;
-                            
-                            std::fs::rename(&tmp_path, &thumb_path)
-                                .with_context(|| format!("failed to finalize thumbnail {}", thumb_path.display()))?;
-                            return Ok(thumb_path);
-                        }
+
+                if let Ok(out) = output
+                    && out.status.success()
+                {
+                    let filename = path
+                        .file_name()
+                        .ok_or_else(|| anyhow::anyhow!("no filename for video"))?;
+                    let generated_png =
+                        temp_dir.join(format!("{}.png", filename.to_string_lossy()));
+                    if generated_png.exists() {
+                        let _guard = FileDropGuard {
+                            path: generated_png.clone(),
+                        };
+                        let img = image::open(&generated_png).with_context(|| {
+                            format!(
+                                "failed to open generated video frame at {}",
+                                generated_png.display()
+                            )
+                        })?;
+                        let mut file = std::fs::File::create(&tmp_path).with_context(|| {
+                            format!("failed to create temp file at {}", tmp_path.display())
+                        })?;
+                        let encoder =
+                            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
+                        image::DynamicImage::ImageRgba8(img.to_rgba8())
+                            .write_with_encoder(encoder)
+                            .with_context(|| {
+                                format!("failed to write jpeg to {}", tmp_path.display())
+                            })?;
+
+                        std::fs::rename(&tmp_path, &thumb_path).with_context(|| {
+                            format!("failed to finalize thumbnail {}", thumb_path.display())
+                        })?;
+                        return Ok(thumb_path);
                     }
                 }
             }
@@ -704,17 +787,23 @@ impl LibraryCache {
                 .with_context(|| format!("failed to decode thumbnail input {}", path.display()))?;
             let rgba = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)
                 .context("failed to construct RGBA thumbnail image")?;
-            let mut file = std::fs::File::create(&tmp_path)
-                .with_context(|| format!("failed to create temp thumbnail file: {}", tmp_path.display()))?;
+            let mut file = std::fs::File::create(&tmp_path).with_context(|| {
+                format!(
+                    "failed to create temp thumbnail file: {}",
+                    tmp_path.display()
+                )
+            })?;
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
             image::DynamicImage::ImageRgba8(rgba)
                 .write_with_encoder(encoder)
-                .with_context(|| format!("failed to write JPEG thumbnail {}", tmp_path.display()))?;
+                .with_context(|| {
+                    format!("failed to write JPEG thumbnail {}", tmp_path.display())
+                })?;
         }
 
         std::fs::rename(&tmp_path, &thumb_path)
             .with_context(|| format!("failed to finalize thumbnail {}", thumb_path.display()))?;
-        
+
         // Compute histogram asynchronously so thumbnail is available immediately
         {
             let pool = self.pool.clone();
@@ -731,7 +820,7 @@ impl LibraryCache {
                 let b_bytes = u32_vec_to_u8_vec(&b);
                 let lum_bytes = u32_vec_to_u8_vec(&lum);
                 let focus_score = media_core::detect_focus_blur(&img);
-                
+
                 if let Ok(conn) = pool.get() {
                     let _ = conn.execute(
                         "INSERT OR REPLACE INTO visual_histograms (path, r_blob, g_blob, b_blob, lum_blob) VALUES (?, ?, ?, ?, ?)",
@@ -770,20 +859,22 @@ impl LibraryCache {
         Ok(())
     }
 
-    pub fn get_visual_histogram(&self, path: &Path) -> Result<Option<([u32; 256], [u32; 256], [u32; 256], [u32; 256])>> {
+    pub fn get_visual_histogram(&self, path: &Path) -> Result<Option<VisualHistogram>> {
         let conn = self.conn()?;
-        let row = conn.query_row(
-            "SELECT r_blob, g_blob, b_blob, lum_blob FROM visual_histograms WHERE path = ?",
-            rusqlite::params![path.to_string_lossy()],
-            |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                ))
-            },
-        ).optional()?;
+        let row = conn
+            .query_row(
+                "SELECT r_blob, g_blob, b_blob, lum_blob FROM visual_histograms WHERE path = ?",
+                rusqlite::params![path.to_string_lossy()],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
 
         if let Some((r_bytes, g_bytes, b_bytes, lum_bytes)) = row {
             let r = u8_vec_to_u32_vec(&r_bytes);
@@ -811,8 +902,12 @@ impl LibraryCache {
             let img = media_core::open_image(path)?;
             let img = media_core::apply_exif_orientation(&img, path);
             let rgb8 = img.to_rgb8();
-            let mut file = std::fs::File::create(&tmp_path)
-                .with_context(|| format!("failed to create decoded cache file: {}", tmp_path.display()))?;
+            let mut file = std::fs::File::create(&tmp_path).with_context(|| {
+                format!(
+                    "failed to create decoded cache file: {}",
+                    tmp_path.display()
+                )
+            })?;
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 95);
             image::DynamicImage::ImageRgb8(rgb8)
                 .write_with_encoder(encoder)
@@ -826,7 +921,8 @@ impl LibraryCache {
 
     pub fn warm_thumbnails(&self, paths: &[PathBuf], active_index: usize, max_side: u32) {
         let mut indexed_paths: Vec<(usize, &PathBuf)> = paths.iter().enumerate().collect();
-        indexed_paths.sort_by_key(|&(orig_idx, _)| (orig_idx as isize - active_index as isize).abs());
+        indexed_paths
+            .sort_by_key(|&(orig_idx, _)| (orig_idx as isize - active_index as isize).abs());
         indexed_paths.truncate(30);
         indexed_paths.par_iter().for_each(|&(_, path)| {
             let _ = self.ensure_thumbnail(path, max_side);
@@ -836,19 +932,20 @@ impl LibraryCache {
 
 impl Drop for LibraryCache {
     fn drop(&mut self) {
-        self.shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
-        
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         // Trigger a final mirror backup to disk via copy_db & wal_checkpoint
-        if let Ok(mem_conn) = self.conn() {
-            if let Ok(mut disk_conn) = rusqlite::Connection::open(&self.db_path) {
-                if let Err(e) = copy_db(&mem_conn, &mut disk_conn) {
-                    eprintln!("Final Drop mirror backup failed: {:?}", e);
-                } else {
-                    let _ = disk_conn.execute_batch(
-                        "PRAGMA wal_checkpoint(PASSIVE);
-                         PRAGMA incremental_vacuum(50);"
-                    );
-                }
+        if let Ok(mem_conn) = self.conn()
+            && let Ok(mut disk_conn) = rusqlite::Connection::open(&self.db_path)
+        {
+            if let Err(e) = copy_db(&mem_conn, &mut disk_conn) {
+                eprintln!("Final Drop mirror backup failed: {:?}", e);
+            } else {
+                let _ = disk_conn.execute_batch(
+                    "PRAGMA wal_checkpoint(PASSIVE);
+                         PRAGMA incremental_vacuum(50);",
+                );
             }
         }
     }

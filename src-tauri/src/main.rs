@@ -1,11 +1,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_str_replace,
+    clippy::identity_op,
+    clippy::io_other_error,
+    clippy::manual_div_ceil,
+    clippy::manual_split_once,
+    clippy::needless_borrow,
+    clippy::type_complexity,
+    clippy::unnecessary_to_owned
+)]
 
 pub mod commands;
 
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 use library_core::{LibraryCache, LibraryIndex};
 use media_core::{SimpleEdit, is_video_path};
@@ -96,40 +107,48 @@ fn parse_range(header: &str, file_len: u64) -> Option<(u64, u64)> {
     } else {
         start_str.parse().ok()?
     };
-    let end: u64 = if end_str.is_empty() { file_len.saturating_sub(1) } else { end_str.parse().ok()? };
-    if start <= end && start < file_len { Some((start, end.min(file_len - 1))) } else { None }
+    let end: u64 = if end_str.is_empty() {
+        file_len.saturating_sub(1)
+    } else {
+        end_str.parse().ok()?
+    };
+    if start <= end && start < file_len {
+        Some((start, end.min(file_len - 1)))
+    } else {
+        None
+    }
 }
 
 pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
     let Ok(canonical_path) = path.canonicalize() else {
         return false;
     };
-    
+
     let roots = state.canonical_roots.read();
     for root in roots.iter() {
         if canonical_path.starts_with(root) {
             return true;
         }
     }
-    
+
     false
 }
 
 pub fn rebuild_canonical_roots(state: &AppState) {
     let mut new_roots = HashSet::new();
-    
+
     if let Some(ref idx) = *state.index.read() {
         if let Ok(idx_root) = idx.root.canonicalize() {
             new_roots.insert(idx_root);
         }
     }
-    
+
     let cache_base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
     let cache_root = cache_base.join("folio-app");
     if let Ok(cache_root_canonical) = cache_root.canonicalize() {
         new_roots.insert(cache_root_canonical);
     }
-    
+
     let recents = state.recent_folders.read();
     for recent_str in recents.iter() {
         let recent_path = PathBuf::from(recent_str);
@@ -137,7 +156,7 @@ pub fn rebuild_canonical_roots(state: &AppState) {
             new_roots.insert(recent_canonical);
         }
     }
-    
+
     *state.canonical_roots.write() = new_roots;
 }
 
@@ -149,9 +168,13 @@ fn main() {
         edits: RwLock::new(HashMap::new()),
         preview_cache: commands::media::ImageLruCache::new(512 * 1024 * 1024), // 512MB RAM preview cache
         recent_folders: RwLock::new(load_recent_folders()),
-        resolved_thumbs: parking_lot::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap())),
+        resolved_thumbs: parking_lot::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(10000).unwrap(),
+        )),
         watcher: RwLock::new(None),
-        dominant_colors: parking_lot::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap())),
+        dominant_colors: parking_lot::Mutex::new(lru::LruCache::new(
+            std::num::NonZeroUsize::new(10000).unwrap(),
+        )),
         canonical_roots: RwLock::new(HashSet::new()),
     });
 
@@ -170,8 +193,10 @@ fn main() {
     builder
         .register_uri_scheme_protocol("folio", move |_ctx, request| {
             let path_str = request.uri().path();
-            let mut decoded = urlencoding::decode(path_str).unwrap_or(std::borrow::Cow::Borrowed(path_str)).to_string();
-            
+            let mut decoded = urlencoding::decode(path_str)
+                .unwrap_or(std::borrow::Cow::Borrowed(path_str))
+                .to_string();
+
             while decoded.starts_with("//") {
                 decoded.remove(0);
             }
@@ -180,7 +205,7 @@ fn main() {
             }
 
             let path = std::path::PathBuf::from(&decoded);
-            
+
             // Path traversal sandboxing guard
             if !is_path_safe(&path, &state_for_uri) {
                 return tauri::http::Response::builder()
@@ -192,27 +217,44 @@ fn main() {
 
             let file_meta = match std::fs::metadata(&path) {
                 Ok(m) => m,
-                Err(_) => return tauri::http::Response::builder().status(404).body(vec![]).unwrap(),
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(404)
+                        .body(vec![])
+                        .unwrap();
+                }
             };
             let file_len = file_meta.len();
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
             let is_video = is_video_path(&path);
-            
-            let modified = file_meta.modified()
-                .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
+
+            let modified = file_meta
+                .modified()
+                .map(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                })
                 .unwrap_or(0);
             let etag = format!("W/\"{:x}-{:x}\"", file_len, modified);
 
-            if let Some(if_none_match) = request.headers().get("if-none-match").and_then(|v| v.to_str().ok()) {
+            if let Some(if_none_match) = request
+                .headers()
+                .get("if-none-match")
+                .and_then(|v| v.to_str().ok())
+            {
                 if if_none_match == etag {
                     return tauri::http::Response::builder()
                         .status(304)
                         .header("Access-Control-Allow-Origin", "*")
-                        .body(vec![]).unwrap();
+                        .body(vec![])
+                        .unwrap();
                 }
             }
 
-            let range_header = request.headers().get("range")
+            let range_header = request
+                .headers()
+                .get("range")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string())
                 .or_else(|| {
@@ -228,12 +270,17 @@ fn main() {
                     if let Some((start, end)) = parse_range(range_val, file_len) {
                         let length = end - start + 1;
                         let chunk_size = length.min(1 * 1024 * 1024); // 1MB chunks to curb memory footprint spikes
-                        
+
                         let file = match std::fs::File::open(&path) {
                             Ok(f) => f,
-                            Err(_) => return tauri::http::Response::builder().status(500).body(vec![]).unwrap(),
+                            Err(_) => {
+                                return tauri::http::Response::builder()
+                                    .status(500)
+                                    .body(vec![])
+                                    .unwrap();
+                            }
                         };
-                        
+
                         // Seek and read safely without unsafe memory mapping
                         use std::io::{Read, Seek, SeekFrom};
                         let mut file = file;
@@ -245,18 +292,41 @@ fn main() {
                             .status(206)
                             .header("Content-Type", mime.as_ref())
                             .header("Accept-Ranges", "bytes")
-                            .header("Content-Range", format!("bytes {}-{}/{}", start, start + bytes_read as u64 - 1, file_len))
+                            .header(
+                                "Content-Range",
+                                format!(
+                                    "bytes {}-{}/{}",
+                                    start,
+                                    start + bytes_read as u64 - 1,
+                                    file_len
+                                ),
+                            )
                             .header("Content-Length", bytes_read.to_string())
                             .header("Access-Control-Allow-Origin", "*")
-                            .body(buf).unwrap();
+                            .body(buf)
+                            .unwrap();
                     }
                 }
+            }
+
+            const MAX_BUFFERED_PROTOCOL_RESPONSE: u64 = 512 * 1024 * 1024;
+            if file_len > MAX_BUFFERED_PROTOCOL_RESPONSE {
+                return tauri::http::Response::builder()
+                    .status(413)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body("413 Payload Too Large".as_bytes().to_vec())
+                    .unwrap();
             }
 
             use std::io::Read;
             let file = match std::fs::File::open(&path) {
                 Ok(f) => f,
-                Err(_) => return tauri::http::Response::builder().status(404).body(vec![]).unwrap(),
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(404)
+                        .body(vec![])
+                        .unwrap();
+                }
             };
             let mut file = std::io::BufReader::new(file);
             let mut data = Vec::with_capacity(file_len as usize);
@@ -272,13 +342,14 @@ fn main() {
                 .header("Cache-Control", cache_val)
                 .header("ETag", etag)
                 .header("Content-Length", data.len().to_string())
-                .body(data).unwrap()
+                .body(data)
+                .unwrap()
         })
         .setup(|app| {
-            use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
-            use tauri::tray::{TrayIconBuilder, TrayIconEvent};
             use tauri::Emitter;
             use tauri::Manager;
+            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+            use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -293,9 +364,24 @@ fn main() {
                 })
                 .build(app)?;
 
-            let open_folder = MenuItem::with_id(app, "open-folder", "Open Folder...", true, Some("CmdOrControl+O"))?;
-            let settings = MenuItem::with_id(app, "settings", "Settings...", true, Some("CmdOrControl+,"))?;
-            let file_menu = Submenu::with_items(app, "File", true, &[&open_folder])?;
+            let open_folder = MenuItem::with_id(
+                app,
+                "open-folder",
+                "Open Folder...",
+                true,
+                Some("CmdOrControl+O"),
+            )?;
+            let open_in_finder = MenuItem::with_id(
+                app,
+                "open-in-finder",
+                "Open Current Folder in Finder",
+                true,
+                Some("CmdOrControl+Shift+O"),
+            )?;
+            let settings =
+                MenuItem::with_id(app, "settings", "Settings...", true, Some("CmdOrControl+,"))?;
+            let file_menu =
+                Submenu::with_items(app, "File", true, &[&open_folder, &open_in_finder])?;
             #[cfg(target_os = "macos")]
             let quit = PredefinedMenuItem::quit(app, None)?;
             #[cfg(target_os = "macos")]
@@ -308,8 +394,15 @@ fn main() {
             app.on_menu_event(move |_app, event| {
                 let id: &str = event.id().as_ref();
                 match id {
-                    "open-folder" => { let _ = handle.emit("menu-open-folder", ()); }
-                    "settings" => { let _ = handle.emit("menu-settings", ()); }
+                    "open-folder" => {
+                        let _ = handle.emit("menu-open-folder", ());
+                    }
+                    "open-in-finder" => {
+                        let _ = handle.emit("menu-open-in-finder", ());
+                    }
+                    "settings" => {
+                        let _ = handle.emit("menu-settings", ());
+                    }
                     _ => {}
                 }
             });
@@ -321,10 +414,8 @@ fn main() {
             commands::catalog::get_folder_items,
             commands::catalog::create_physical_folder,
             commands::catalog::delete_physical_file,
-
             commands::recent::get_recent_folders,
             commands::recent::add_recent_folder,
-
             commands::media::set_window_vibrancy,
             commands::media::trigger_macos_sound,
             commands::media::get_thumbnail,
@@ -337,7 +428,6 @@ fn main() {
             commands::media::find_visual_duplicates,
             commands::media::batch_transcode,
             commands::media::get_visual_histogram,
-
             commands::metadata::update_exif_metadata,
             commands::metadata::add_tag_to_image,
             commands::metadata::remove_tag_from_image,
@@ -350,6 +440,9 @@ fn main() {
             commands::metadata::get_folder_tags_summary,
             commands::metadata::get_edit,
             commands::metadata::set_edit,
+            commands::metadata::batch_add_tag,
+            commands::metadata::batch_trash_files,
+            commands::metadata::batch_scrub_exif,
             commands::storage::get_storage_diagnostics,
             commands::storage::purge_cache,
             commands::secure::authenticate_vault,
@@ -357,6 +450,7 @@ fn main() {
             commands::secure::audit_file_checksum,
             commands::secure::search_directory_spotlight,
             commands::secure::show_native_share_sheet,
+            commands::secure::open_in_finder,
             commands::secure::submit_crash_report,
         ])
         .run(tauri::generate_context!())
