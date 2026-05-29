@@ -1,6 +1,6 @@
 const STORAGE_KEY = 'folio_onboarding_complete';
 const STORAGE_VERSION_KEY = 'folio_onboarding_version';
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 
 const STEPS = [
   {

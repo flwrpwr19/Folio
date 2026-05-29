@@ -1,3 +1,12 @@
+# Folio v1.5.1
+
+**Hotfix:** v1.5.0 macOS downloads shipped a stale app bundle (old UI). Use **v1.5.1** only.
+
+- Release pipeline now forces `target/` as `CARGO_TARGET_DIR` and verifies the embedded frontend hash before packaging.
+- Removed fallback that could package an outdated `folio.app` without running Tauri bundle.
+
+---
+
 # Folio v1.5.0
 
 Folio v1.5.0 is a polish and performance release: branded macOS installer pipeline, unified viewer toolbar (including video), stronger cache/preload behavior, native macOS helpers, and vault/documentation hardening.
