@@ -1,5 +1,7 @@
 # Folio
 
+![Folio banner](assets/brand/folio-readme-banner.png)
+
 A lightweight photo and video viewer built in rust.
 
 Folio is a high-performance, macOS-native media viewer. It uses Tauri for its architecture, leveraging a native Rust backend for lightning-fast media decoding and a modern Vanilla JS/CSS frontend for a polished UI.
@@ -27,9 +29,9 @@ Folio is a high-performance, macOS-native media viewer. It uses Tauri for its ar
 - **Smart Catalog Workflows**: Ratings, favorites, smart filters, saved smart albums, sidecar metadata export/import, and job-tracked batch operations.
 - **Release-Grade Packaging**: macOS packaging now validates and bundles the Touch ID helper required for biometric vault security.
 
-## v1.4.0 Roadmap Snapshot
+## v1.4.0 Release Snapshot
 
-Folio v1.4.0 focuses on turning the viewer into a safer catalog workflow tool:
+Folio v1.4.0 turned the viewer into a safer catalog workflow tool:
 
 - Secure Album Vault with Touch ID unlock, auto-lock behavior, and protected command boundaries.
 - Cancellable backend jobs for transcode, EXIF scrub, vault import/export, thumbnail warmup, ratings, favorites, and trash.
@@ -39,29 +41,35 @@ Folio v1.4.0 focuses on turning the viewer into a safer catalog workflow tool:
 
 ## 🗺️ Roadmap & Upcoming Changes
 
-We are actively engineering several high-performance upgrades, workflow enhancements, and deep native macOS integrations. Here is what is currently in active development:
+We are actively engineering installation polish, a cleaner professional interface, deeper backend performance work, and cache reliability fixes. Here is what is currently planned after v1.4.0:
 
-### 🚄 Phase 1: High-Performance Engine & Caching (Engine Sweep)
-* **Direct Memory-Mapped SQLite Mirroring**: Syncing hyper-active read indices to in-memory databases (`:memory:`) to drop search and filter query latencies to near-zero.
-* **SIMD-Accelerated Downscaler**: Re-architecting thumbnail generation with AVX-2, SSE, and NEON instruction sets using the `fast_image_resize` crate.
-* **Zero-Copy Chunk Streaming**: Updating our custom Tauri asset protocol to stream media via asynchronous `ReaderStream` and `tokio::fs::File` pipelines, drastically shrinking memory overhead.
-* **Auto-Vacuuming & Database Tuning**: Actively managing cache footprints with incremental vacuum scheduling (`PRAGMA incremental_vacuum`) and background WAL database checkpoints.
+### 📦 Phase 1: Installer & First-Run Polish
+* **Custom DMG Installer Window**: Replace the blank Finder DMG layout with a guided install window showing the Folio app icon, Applications folder shortcut, and clear "Drag Folio to Applications" instruction.
+* **DMG Background Design**: Add a simple branded background image so non-technical users immediately understand what to do after opening the installer.
+* **Release Asset Consistency**: Ensure the DMG, app tarball, bundled Touch ID helper, and release notes are generated from the same app bundle before upload.
+* **First-Run Install Guidance**: Improve README and in-app messaging around unsigned macOS builds, quarantine clearing, and safe installation.
 
-### 🎨 Phase 2: Responsive Workspaces & Custom Cursor HUDs
-* **Pane Partitions & Dynamic Grid pack**: Integrating draggable canvas dividers to scale workspace sections dynamically alongside pixel-perfect adaptive grid cols.
-* **Compact Cursor Ring & Pointer HUDs**: Reducing the primary magnetic ring footprint to an elegant, minimal target pointer, transitioning to specialized pointer vectors (double arrows, crosshairs) on sliders and timelines.
-* **Storage Diagnostics Dashboard**: Adding a Cache Control settings menu allowing users to monitor database/thumbnail directory sizes on disk and clear all local caches with a single click.
+### 🎨 Phase 2: Frontend/UI UX Redesign
+* **Professional App Shell Refresh**: Redesign the sidebar, catalog grid, settings modal, toolbar actions, empty states, and batch HUD into a calmer, more consistent photo-management interface.
+* **Clearer Visual Hierarchy**: Make primary actions obvious, reduce decorative noise, tighten spacing, and improve scanability for folders with hundreds or thousands of media items.
+* **Settings Rework**: Split Settings into focused panels for General, Catalog, Cache, Security, Export, and Shortcuts with better labels and less cramped controls.
+* **Catalog Workflow Upgrade**: Improve selection states, smart filters, duplicate review, ratings/favorites, and batch progress so they feel cohesive rather than bolted on.
+* **Accessibility Polish**: Verify text contrast, focus rings, keyboard navigation, reduced motion behavior, and high-contrast mode across viewer, catalog, modals, and settings.
 
-### 📸 Phase 3: Professional Creative & Audit Utilities
-* **Before/After Comparators**: Implementing dual-viewport slider controls to inspect brightness, vibrance, or tone curve adjustments side-by-side.
-* **Visual Duplicates Resolver overlay**: A clean, side-by-side metadata and visual resolver grid to instantly review, compare, and prune low-quality duplicates.
-* **Mapbox/Leaflet GPS Geolocation Mapping**: Upgrading static coordinates into dynamic interactive Leaflet mapping networks, clustered with photo thumbnails.
-* **Selection Modification HUD**: Sliding metadata panel with EXIF adjustments, tagging tools, and an integrated catalog file delete controller.
+### 🚄 Phase 3: Backend Optimization & Cache Reliability
+* **Fix Cache Clearing Behavior**: Cache clearing should never leave an open folder with an empty sidebar. After purge/prune, Folio should preserve the current folder, rebuild thumbnails/indexes, and refresh the visible catalog automatically.
+* **Cache Error Hardening**: Make cache purge/prune resilient when files are locked, already removed, or still referenced by the viewer; report partial failures without making the settings flow feel broken.
+* **Job Queue Refinement**: Move more heavy operations onto cancellable jobs with progress, retry, and final accounting so the UI stays responsive during large folders.
+* **Protocol Streaming Upgrade**: Continue reducing memory spikes by replacing buffered media responses with streaming where Tauri allows it.
+* **Database Maintenance**: Tighten SQLite checkpointing, incremental vacuuming, metadata writes, and cache index consistency after folder changes.
+* **Thumbnail Pipeline Optimization**: Continue SIMD/downscale tuning, failure caching, and prefetch heuristics for faster catalog browsing.
 
 ### 🍏 Phase 4: Apple Hardware & Security Platform integrations
 * **Live Photos AVPlayer**: Seamless pairing of HEIC+MOV formats, rendering active Live Photo sequences on hold clicks.
 * **CoreML Asset Auto-Taggers**: On-device classification via Apple's Neural Engine using mobile neural classifiers.
 * **CoreHaptics Trackpad Snapping**: Generating physical haptic ticks on Apple Trackpads when scales lock to fit margins or 100%.
+* **Native Share Sheet Replacement**: Replace AppleScript share triggering with a direct native Cocoa/Tauri implementation.
+* **Vault Hardening**: Continue tightening Secure Album behavior around export, reveal, trash, auto-lock, and recovery edge cases.
 
 > **Note:** The auto-updater is currently on hold due to signature and certificate issues. Please download manual updates from the GitHub Releases page.
 
