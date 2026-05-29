@@ -1,3 +1,9 @@
+# Folio v1.3.1
+
+Restores instant arrow-key navigation: reuses preloaded full-res images, skips decode/animation delays when moving quickly, and widens the preload window.
+
+---
+
 # Folio v1.3.0
 
 Folio v1.3.0 adds the redesigned shell (onboarding, home hub, settings), a branded macOS installer, unified viewer toolbar with video controls, stronger cache/preload behavior, native macOS helpers, and vault hardening.

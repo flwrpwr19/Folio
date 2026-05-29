@@ -2095,6 +2095,13 @@ function openCurrentFolderInFinder() {
 
 function nav(dir) { if (items.length) show((idx + dir + items.length) % items.length, dir); }
 
+function isRapidViewerNav() {
+  const now = performance.now();
+  const rapid = now - (window._lastShowAt || 0) < 180;
+  window._lastShowAt = now;
+  return rapid;
+}
+
 function clearMediaContent(keep = null) {
   Array.from(media.children).forEach(c => { if (c !== mediaLoader && c !== keep) c.remove(); });
 }
@@ -2185,9 +2192,9 @@ function triggerPreload(currentIdx) {
 
   const isFast = speed > 0.003;
   if (isFast) {
-    for (let o = 1; o <= 3; o++) offsets.push(o * direction);
+    for (let o = 1; o <= 6; o++) offsets.push(o * direction);
   } else {
-    offsets.push(-2, -1, 1, 2);
+    offsets.push(-3, -2, -1, 1, 2, 3);
   }
 
   const currentItem = items[currentIdx];
@@ -2220,11 +2227,18 @@ function triggerPreload(currentIdx) {
     }
   }
 
-  for (const path of preloadCache.keys()) {
-    if (!keepSet.has(path)) {
-      const img = preloadCache.get(path);
-      // Keep in-flight preloads so the next show() can use the full-res image.
-      if (img?.complete && img.naturalWidth > 0) preloadCache.delete(path);
+  // Drop incomplete loads outside the window; cap total cache size.
+  for (const [path, img] of [...preloadCache.entries()]) {
+    if (keepSet.has(path)) continue;
+    if (!img.complete || !img.naturalWidth) preloadCache.delete(path);
+  }
+  const PRELOAD_CACHE_MAX = 18;
+  if (preloadCache.size > PRELOAD_CACHE_MAX) {
+    for (const path of preloadCache.keys()) {
+      if (!keepSet.has(path)) {
+        preloadCache.delete(path);
+        if (preloadCache.size <= PRELOAD_CACHE_MAX) break;
+      }
     }
   }
   for (const path of videoPreloadCache.keys()) {
@@ -2233,6 +2247,8 @@ function triggerPreload(currentIdx) {
 }
 
 function show(i, dir = null) {
+  triggerPreload(i);
+  const rapidNav = isRapidViewerNav();
   const prevIdx = idx, direction = dir !== null ? dir : (i > prevIdx ? 1 : i < prevIdx ? -1 : 0);
   idx = i; zoom = 1; panX = 0; panY = 0;
   zoomSlider.value = 100; zoomLabel.textContent = '100%';
@@ -2245,7 +2261,9 @@ function show(i, dir = null) {
   }
   const src = `folio://localhost/${encodeURIComponent(item.path)}`, outgoing = media.querySelector('.media-layer.media-active');
   if (outgoing) {
-    if (cinematicEnabled && direction !== 0) {
+    if (rapidNav) {
+      outgoing.remove();
+    } else if (cinematicEnabled && direction !== 0) {
       applyPhysicalExit(outgoing, direction);
     } else {
       outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 400, easing: 'ease-out' }).finished.then(() => outgoing.remove());
@@ -2256,7 +2274,10 @@ function show(i, dir = null) {
   const layer = document.createElement('div'); layer.className = 'media-layer media-active';
   layer.style.zIndex = '2';
   
-  if (cinematicEnabled && direction !== 0) {
+  if (rapidNav) {
+    layer.style.opacity = '1';
+    layer.style.transform = 'none';
+  } else if (cinematicEnabled && direction !== 0) {
     requestAnimationFrame(() => layer.animate([
         { opacity: 0, transform: `translate3d(${direction * 50}%, 0, 0) scale(1.02) rotate(${direction * 1.5}deg)` },
         { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1) rotate(0deg)' }
@@ -2304,8 +2325,9 @@ function show(i, dir = null) {
   } else {
     const cached = preloadCache.get(item.path);
     const preloadReady = cached && cached.complete && cached.naturalWidth > 0;
-    viewer.classList.add('loading');
-    if (!preloadReady) {
+    const usePlaceholder = !preloadReady && !rapidNav;
+    if (!preloadReady) viewer.classList.add('loading');
+    if (usePlaceholder) {
       const ts = preloadedThumbs.get(item.path);
       if (ts) {
         const ph = document.createElement('img');
@@ -2316,92 +2338,88 @@ function show(i, dir = null) {
         layer.appendChild(ph);
       }
     }
-    const img = document.createElement('img'); img.crossOrigin = "anonymous"; img.alt = ''; img.className = 'media-content';
-    let revealToken = 0;
-    const onImgReady = () => {
+
+    const runViewerChrome = (img) => {
+      if (items[idx]?.path !== item.path) return;
+      img.classList.add('loaded');
+      img.style.opacity = '1';
+      viewer.classList.remove('loading');
+      const ph = layer.querySelector('.placeholder-thumb');
+      if (ph) {
+        ph.classList.remove('loaded');
+        ph.classList.add('fade-out');
+        setTimeout(() => ph.remove(), 120);
+      }
+      requestAnimationFrame(() => {
         if (items[idx]?.path !== item.path) return;
-        img.classList.add('loaded');
-        img.style.opacity = '1';
-        viewer.classList.remove('loading');
-        const ph = layer.querySelector('.placeholder-thumb');
-        if (ph) {
-          ph.classList.remove('loaded');
-          ph.classList.add('fade-out');
-          setTimeout(() => ph.remove(), 200);
+        try { updateAdaptiveGlow(img); } catch (e) { console.error('Adaptive glow error:', e); }
+        if (isEditPreviewEnabled()) {
+          invoke('prepare_edit_preview', { path: item.path }).then(() => {
+            editSessionPath = item.path;
+            loadEditForCurrent();
+          }).catch(e => console.error(e));
         }
-        
-        // Defer CPU-heavy color analytics to unblock visual navigation animations
-        setTimeout(() => {
-          requestAnimationFrame(() => {
-            if (items[idx]?.path !== item.path) return;
-            try {
-                updateAdaptiveGlow(img);
-            } catch (e) {
-                console.error("Adaptive glow error:", e);
-            }
-            if (isEditPreviewEnabled()) {
-              invoke('prepare_edit_preview', { path: item.path }).then(() => {
-                editSessionPath = item.path;
-                loadEditForCurrent();
-              }).catch(e => console.error(e));
-            }
-            try {
-              drawHistogram(img);
-            } catch (e) {
-              console.error('Histogram error:', e);
-            }
-            try {
-              drawDominantColors(item);
-            } catch (e) {
-              console.error('Dominant colors error:', e);
-            }
-          });
-        }, 50);
+        try { drawHistogram(img); } catch (e) { console.error('Histogram error:', e); }
+        try { drawDominantColors(item); } catch (e) { console.error('Dominant colors error:', e); }
+      });
     };
-    const revealViewerImage = async () => {
-      const token = ++revealToken;
-      try {
-        if (img.decode) await img.decode();
-      } catch (_) { /* decode can reject; still show if dimensions are valid */ }
-      if (token !== revealToken || items[idx]?.path !== item.path) return;
-      if (!img.naturalWidth) return;
-      onImgReady();
-    };
-    img.onload = () => { revealViewerImage(); };
-    img.onerror = () => {
+
+    const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(item.path.split('.').pop().toLowerCase());
+    let img;
+    let revealToken = 0;
+
+    if (preloadReady) {
+      preloadCache.delete(item.path);
+      img = cached;
+      img.className = 'media-content';
+      img.alt = '';
+      img.style.opacity = '1';
+      layer.appendChild(img);
+      runViewerChrome(img);
+    } else {
+      img = document.createElement('img');
+      img.crossOrigin = 'anonymous';
+      img.alt = '';
+      img.className = 'media-content';
+
+      const revealViewerImage = async () => {
+        const token = ++revealToken;
+        if (usePlaceholder && img.decode) {
+          try { await img.decode(); } catch (_) { /* show anyway */ }
+        }
+        if (token !== revealToken || items[idx]?.path !== item.path) return;
+        if (!img.naturalWidth) return;
+        runViewerChrome(img);
+      };
+
+      img.onload = () => { revealViewerImage(); };
+      img.onerror = () => {
         viewer.classList.remove('loading');
         const ph = layer.querySelector('.placeholder-thumb');
         if (ph) ph.remove();
         renderMediaError(layer, item, () => {
-            img.src = '';
-            if (isNative) {
-                img.src = src + '?retry=' + Date.now();
-            } else {
-                invoke('clear_decode_failures', { path: item.path }).catch(() => {});
-                invoke('get_full_image', { path: item.path, force: true })
-                    .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}?retry=${Date.now()}`; })
-                    .catch(() => { img.src = src + '?retry=' + Date.now(); });
-            }
+          img.src = '';
+          if (isNative) {
+            img.src = src + '?retry=' + Date.now();
+          } else {
+            invoke('clear_decode_failures', { path: item.path }).catch(() => {});
+            invoke('get_full_image', { path: item.path, force: true })
+              .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}?retry=${Date.now()}`; })
+              .catch(() => { img.src = src + '?retry=' + Date.now(); });
+          }
         });
-    };
+      };
 
-    if (preloadReady) {
-        img.src = cached.src;
+      if (isNative) {
+        img.src = src;
         if (img.complete && img.naturalWidth > 0) revealViewerImage();
-    } else {
-        const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(item.path.split('.').pop().toLowerCase());
-        if (isNative) {
-            img.src = src;
-        } else {
-            invoke('get_full_image', { path: item.path })
-                .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}`; })
-                .catch(() => {
-                    // Trigger grace fallback directly if full image retrieval fails
-                    img.onerror();
-                });
-        }
+      } else {
+        invoke('get_full_image', { path: item.path })
+          .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}`; })
+          .catch(() => { img.onerror(); });
+      }
+      layer.appendChild(img);
     }
-    layer.appendChild(img);
 
     if (item.isLivePhoto && item.livePhotoVideoPath) {
       const v = document.createElement('video');
