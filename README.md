@@ -43,33 +43,42 @@ Folio v1.4.0 turned the viewer into a safer catalog workflow tool:
 
 We are actively engineering installation polish, a cleaner professional interface, deeper backend performance work, and cache reliability fixes. Here is what is currently planned after v1.4.0:
 
-### 📦 Phase 1: Installer & First-Run Polish
-* **Custom DMG Installer Window**: Replace the blank Finder DMG layout with a guided install window showing the Folio app icon, Applications folder shortcut, and clear "Drag Folio to Applications" instruction.
-* **DMG Background Design**: Add a simple branded background image so non-technical users immediately understand what to do after opening the installer.
-* **Release Asset Consistency**: Ensure the DMG, app tarball, bundled Touch ID helper, and release notes are generated from the same app bundle before upload.
-* **First-Run Install Guidance**: Improve README and in-app messaging around unsigned macOS builds, quarantine clearing, and safe installation.
+### 📦 Phase 1: Installer & First-Run Polish ✅
+* **Custom DMG Installer Window** ✅ — `scripts/create-release-dmg.sh` (create-dmg) with Folio icon + Applications drop link.
+* **DMG Background Design** ✅ — Branded background via `assets/brand/folio-readme-banner.png`.
+* **Release Asset Consistency** ✅ — `npm run build:macos-release` → package helpers → DMG → `scripts/verify-release-assets.sh`.
+* **First-Run Install Guidance** ✅ — README Gatekeeper / `xattr` steps below.
 
-### 🎨 Phase 2: Frontend/UI UX Redesign
-* **Professional App Shell Refresh**: Redesign the sidebar, catalog grid, settings modal, toolbar actions, empty states, and batch HUD into a calmer, more consistent photo-management interface.
-* **Clearer Visual Hierarchy**: Make primary actions obvious, reduce decorative noise, tighten spacing, and improve scanability for folders with hundreds or thousands of media items.
-* **Settings Rework**: Split Settings into focused panels for General, Catalog, Cache, Security, Export, and Shortcuts with better labels and less cramped controls.
-* **Catalog Workflow Upgrade**: Improve selection states, smart filters, duplicate review, ratings/favorites, and batch progress so they feel cohesive rather than bolted on.
-* **Accessibility Polish**: Verify text contrast, focus rings, keyboard navigation, reduced motion behavior, and high-contrast mode across viewer, catalog, modals, and settings.
+### 👋 Phase 1.5: In-App Onboarding ✅
+* **First-Launch Wizard** ✅ — Welcome, trust/Gatekeeper, open folder, permissions, UI tour, preferences.
+* **Calm Empty State** ✅ — Home hub and open-folder flow without decorative aurora.
+* **Show Again** ✅ — Settings → General can replay onboarding.
 
-### 🚄 Phase 3: Backend Optimization & Cache Reliability
-* **Fix Cache Clearing Behavior**: Cache clearing should never leave an open folder with an empty sidebar. After purge/prune, Folio should preserve the current folder, rebuild thumbnails/indexes, and refresh the visible catalog automatically.
-* **Cache Error Hardening**: Make cache purge/prune resilient when files are locked, already removed, or still referenced by the viewer; report partial failures without making the settings flow feel broken.
-* **Job Queue Refinement**: Move more heavy operations onto cancellable jobs with progress, retry, and final accounting so the UI stays responsive during large folders.
-* **Protocol Streaming Upgrade**: Continue reducing memory spikes by replacing buffered media responses with streaming where Tauri allows it.
-* **Database Maintenance**: Tighten SQLite checkpointing, incremental vacuuming, metadata writes, and cache index consistency after folder changes.
-* **Thumbnail Pipeline Optimization**: Continue SIMD/downscale tuning, failure caching, and prefetch heuristics for faster catalog browsing.
+### 🎨 Phase 2: Frontend/UI UX Redesign ✅
+* **Professional App Shell** ✅ — 3-pane shell, home hub, inspector, catalog grid, batch HUD, viewer toolbar.
+* **Settings Rework** ✅ — General, Appearance, Catalog, Cache, Export, Shortcuts, Security, Advanced.
+* **Catalog Workflow** ✅ — Smart filters, duplicates resolver, ratings/favorites, batch jobs panel.
+* **Accessibility** ✅ — Focus rings, reduced motion, high contrast (`modules/a11y.js`).
 
-### 🍏 Phase 4: Apple Hardware & Security Platform integrations
-* **Live Photos AVPlayer**: Seamless pairing of HEIC+MOV formats, rendering active Live Photo sequences on hold clicks.
-* **CoreML Asset Auto-Taggers**: On-device classification via Apple's Neural Engine using mobile neural classifiers.
-* **CoreHaptics Trackpad Snapping**: Generating physical haptic ticks on Apple Trackpads when scales lock to fit margins or 100%.
-* **Native Share Sheet Replacement**: Replace AppleScript share triggering with a direct native Cocoa/Tauri implementation.
-* **Vault Hardening**: Continue tightening Secure Album behavior around export, reveal, trash, auto-lock, and recovery edge cases.
+### 🚄 Phase 3: Backend Optimization & Cache Reliability ✅
+* **Fix Cache Clearing Behavior** ✅ — Active folder is re-indexed after purge/metadata clear; UI refreshes via `refresh_active_library` / `get_folder_items`.
+* **Cache Error Hardening** ✅ — Locked/missing cache files are skipped with warnings; partial clears complete successfully.
+* **Job Queue Refinement** ✅ — Jobs emit `job-update` events; per-path retry; thumbnail warmup uses failure cache + retry.
+* **Protocol Streaming Upgrade** ✅ — Range/chunked responses for video and ranged reads; large images buffer up to 64MB (no broken 416 gate).
+* **Database Maintenance** ✅ — WAL checkpoint + incremental vacuum after index builds and metadata clears.
+* **Thumbnail Pipeline Optimization** ✅ — Bounded parallel warmup, thumb/decode failure caches, navigation prefetch jobs.
+
+### 🍏 Phase 4: Apple Hardware & Security Platform integrations ✅
+* **Live Photos AVPlayer** ✅ — Long-press a Live Photo opens native AVPlayer preview; hover still plays inline.
+* **CoreML Asset Auto-Taggers** ✅ — `classify_image_path` uses Vision on-device (`macos_haptic_tick` / helper).
+* **CoreHaptics Trackpad Snapping** ✅ — Haptic tick when zoom snaps back to fit (100%).
+* **Native Share Sheet Replacement** ✅ — `NSSharingServicePicker` via `folio_macos_helper` (no Finder AppleScript).
+* **Vault Hardening** ✅ — Block export into vault dir, repair catalog command, configurable auto-lock refresh.
+
+### ⚙️ Phase 5: Performance (partial ✅)
+* **Predictive Preload Queue** ✅ — Direction-aware still/video preload + 640px thumbs + RAW decode prefetch for ±1 neighbors.
+* **Decode / cache tuning** ✅ — CPU-aware parallelism (2–8 workers), decoded cache limit + LRU prune, parallel thumbnail jobs.
+* **libraw / Metal** — Not planned (diminishing returns vs. maintenance cost for this app).
 
 > **Note:** The auto-updater is currently on hold due to signature and certificate issues. Please download manual updates from the GitHub Releases page.
 
