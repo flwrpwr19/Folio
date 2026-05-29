@@ -1,5 +1,5 @@
 use crate::{AppState, UiExif, UiItem};
-use library_core::build_index;
+use library_core::{LibraryIndex, build_index};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -187,6 +187,41 @@ pub async fn open_folder_picker(
     Ok(Some(path_str))
 }
 
+#[derive(serde::Serialize, Clone)]
+pub struct OpenMediaResult {
+    pub folder: String,
+    pub file: String,
+}
+
+#[tauri::command]
+pub async fn open_media_at_path(
+    file_path: String,
+    state: State<'_, Arc<AppState>>,
+    app_handle: tauri::AppHandle,
+) -> Result<OpenMediaResult, String> {
+    let path = PathBuf::from(&file_path);
+    if path.is_dir() {
+        let folder = open_specific_folder(file_path, state, app_handle).await?;
+        return Ok(OpenMediaResult {
+            folder,
+            file: String::new(),
+        });
+    }
+    if !path.is_file() {
+        return Err("Path is not a file or folder".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "File has no parent directory".to_string())?;
+    let folder_str = parent.to_string_lossy().to_string();
+    let file_str = path.to_string_lossy().to_string();
+    open_specific_folder(folder_str.clone(), state, app_handle).await?;
+    Ok(OpenMediaResult {
+        folder: folder_str,
+        file: file_str,
+    })
+}
+
 #[tauri::command]
 pub async fn open_specific_folder(
     path: String,
@@ -223,40 +258,102 @@ pub async fn open_specific_folder(
     Ok(path_str)
 }
 
+fn index_to_ui_items(index: &LibraryIndex) -> Vec<UiItem> {
+    index
+        .items
+        .iter()
+        .map(|item| {
+            let exif = item.metadata.exif.as_ref().map(|e| UiExif {
+                camera: e.camera.clone(),
+                aperture: e.aperture.clone(),
+                shutter_speed: e.shutter_speed.clone(),
+                iso: e.iso.clone(),
+                focal_length: e.focal_length.clone(),
+                latitude: e.latitude,
+                longitude: e.longitude,
+            });
+            UiItem {
+                path: item.path.to_string_lossy().to_string(),
+                width: item.metadata.width,
+                height: item.metadata.height,
+                orientation: item.metadata.orientation,
+                format: item.metadata.format.map(|f| format!("{:?}", f)),
+                is_video: item.is_video,
+                size: item.size,
+                modified: item.modified,
+                exif,
+                focus_score: item.metadata.focus_score,
+            }
+        })
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+pub struct RefreshLibraryResult {
+    pub folder: String,
+    pub items: Vec<UiItem>,
+}
+
+#[tauri::command]
+pub async fn refresh_active_library(
+    state: State<'_, Arc<AppState>>,
+    app_handle: tauri::AppHandle,
+) -> Result<Option<RefreshLibraryResult>, String> {
+    let state_arc = state.inner().clone();
+    let state_for_watcher = state_arc.clone();
+    let refresh = tauri::async_runtime::spawn_blocking(move || {
+        let folder_path = {
+            let guard = state_arc.index.read();
+            guard.as_ref().map(|idx| idx.root.clone())
+        };
+        let Some(folder_path) = folder_path else {
+            return Ok(None);
+        };
+        if !folder_path.exists() || !folder_path.is_dir() {
+            return Err("The active folder no longer exists".to_string());
+        }
+
+        let index = build_index(&folder_path, &state_arc.cache).map_err(|e| e.to_string())?;
+        let path_str = folder_path.to_string_lossy().to_string();
+        *state_arc.index.write() = Some(index.clone());
+
+        state_arc.resolved_thumbs.lock().clear();
+        state_arc.preview_cache.clear();
+        state_arc.decode_failures.lock().clear();
+        state_arc.thumb_failures.lock().clear();
+        state_arc.dominant_colors.lock().clear();
+
+        let items = index_to_ui_items(&index);
+
+        let state_clone = state_arc.clone();
+        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
+        std::thread::spawn(move || {
+            state_clone.cache.warm_thumbnails(&paths, 0, 320);
+        });
+
+        Ok(Some(RefreshLibraryResult {
+            folder: path_str,
+            items,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if let Some(ref res) = refresh {
+        let _ = setup_watcher(&PathBuf::from(&res.folder), &state_for_watcher, app_handle);
+        crate::rebuild_canonical_roots(&state_for_watcher);
+    }
+
+    Ok(refresh)
+}
+
 #[tauri::command]
 pub async fn get_folder_items(state: State<'_, Arc<AppState>>) -> Result<Vec<UiItem>, String> {
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let index_lock = state_arc.index.read();
         if let Some(index) = &*index_lock {
-            let items = index
-                .items
-                .iter()
-                .map(|item| {
-                    let exif = item.metadata.exif.as_ref().map(|e| UiExif {
-                        camera: e.camera.clone(),
-                        aperture: e.aperture.clone(),
-                        shutter_speed: e.shutter_speed.clone(),
-                        iso: e.iso.clone(),
-                        focal_length: e.focal_length.clone(),
-                        latitude: e.latitude,
-                        longitude: e.longitude,
-                    });
-                    UiItem {
-                        path: item.path.to_string_lossy().to_string(),
-                        width: item.metadata.width,
-                        height: item.metadata.height,
-                        orientation: item.metadata.orientation,
-                        format: item.metadata.format.map(|f| format!("{:?}", f)),
-                        is_video: item.is_video,
-                        size: item.size,
-                        modified: item.modified,
-                        exif,
-                        focus_score: item.metadata.focus_score,
-                    }
-                })
-                .collect();
-            Ok(items)
+            Ok(index_to_ui_items(index))
         } else {
             Ok(vec![])
         }

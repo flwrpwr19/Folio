@@ -29,3 +29,13 @@ pub async fn add_recent_folder(
     crate::rebuild_canonical_roots(&state);
     Ok(())
 }
+
+#[tauri::command]
+pub async fn clear_recent_folders(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let mut recents = state.recent_folders.write();
+    recents.clear();
+    crate::save_recent_folders(&[]);
+    drop(recents);
+    crate::rebuild_canonical_roots(&state);
+    Ok(())
+}

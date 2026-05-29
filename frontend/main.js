@@ -5,6 +5,18 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { createEventBus } from './modules/state.js';
 import { trackJob } from './modules/jobs.js';
+import { initOnboarding, isOnboardingComplete, resetOnboarding } from './modules/onboarding.js';
+import {
+  getPinnedFolders, togglePinnedFolder, isPinned, getHomeLayout, saveHomeLayout,
+  formatHomePath, folderDisplayName,
+} from './modules/home.js';
+import { analyzeDuplicateGroup } from './modules/duplicates.js';
+import { renderEmptyState, clearEmptyState, setInlineStatus } from './modules/empty-states.js';
+import { initToast, showToast } from './modules/toast.js';
+import { initZoomController, queueWheelZoom } from './modules/zoom.js';
+import { bindVideoToolbar, detachVideoToolbar, toggleVideoPlayback } from './modules/video-player.js';
+import { formatFilenameForDialog, basename, truncateDisplayName } from './modules/format.js';
+import { initA11y } from './modules/a11y.js';
 
 /* ── State ── */
 let items = [];
@@ -20,64 +32,102 @@ let isFullscreen = false;
 /* ── DOM ── */
 const app = document.getElementById('app');
 app.innerHTML = `
-  <div class="welcome" id="welcome">
-    <div class="welcome-dragbar" id="wDrag" data-tauri-drag-region></div>
-    <div class="welcome-bg" id="welcomeBg">
-      <div class="welcome-bg-inner"></div>
-    </div>
-    <div class="welcome-content">
-      <h1>Folio</h1>
-      <p class="tagline">Your photography, undistracted.</p>
-      <div class="welcome-dropzone" id="welcomeDropzone">
-        <span class="drop-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg></span>
-        <span class="drop-text">Drop folder here</span>
-      </div>
-      <button class="welcome-btn" id="openBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg><span>Open Folder</span></button>
-      <div class="recent-folders" id="recentFolders"></div>
-      <div class="welcome-shortcuts">
-        <span><kbd>⇧</kbd> + Scroll to Zoom</span>
-        <span><kbd>⇧</kbd> + Mid Click to Pan</span>
-        <span>Drag to Move Window</span>
-      </div>
+  <div class="home-hub" id="welcome">
+    <div class="home-layout">
+      <aside class="home-side">
+        <div class="home-side-chrome" id="wDrag" data-tauri-drag-region></div>
+        <div class="home-side-scroll">
+        <div class="home-brand">
+          <h1>Folio</h1>
+          <p class="tagline">Fast, private media browsing for macOS.</p>
+        </div>
+        <div class="home-section" id="homeLibrarySection">
+          <div class="home-section-title">Library</div>
+          <div class="home-actions">
+            <button type="button" class="home-btn home-btn-primary" id="openBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg> Open Folder</button>
+            <button type="button" class="home-btn" id="homeCatalogBtn" style="display:none">Media Catalog</button>
+          </div>
+        </div>
+        <div class="home-section" id="homePinnedSection">
+          <div class="home-section-head">
+            <span class="home-section-title">Pinned locations</span>
+          </div>
+          <div class="home-list" id="pinnedFolders"></div>
+        </div>
+        <div class="home-section" id="homeRecentsSection">
+          <div class="home-section-head">
+            <span class="home-section-title">Recent</span>
+            <button type="button" class="home-text-btn" id="clearRecentsHomeBtn" title="Clear recent folders list">Clear</button>
+          </div>
+          <div class="home-list" id="recentFolders"></div>
+        </div>
+        <div class="home-section" id="homeCustomizeSection">
+          <div class="home-section-head">
+            <span class="home-section-title">Customize home</span>
+          </div>
+          <p class="home-customize-hint">Show or hide sections on this screen.</p>
+          <div class="home-customize" id="homeCustomizeChips"></div>
+        </div>
+        </div>
+      </aside>
+      <main class="home-main">
+        <div class="home-dropzone" id="welcomeDropzone">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+          <span>Drop a folder to open</span>
+        </div>
+        <div class="home-shortcuts">
+          <span><kbd>G</kbd> Catalog</span>
+          <span><kbd>I</kbd> Metadata</span>
+          <span><kbd>E</kbd> Edit</span>
+          <span><kbd>B</kbd> Sidebar</span>
+        </div>
+      </main>
     </div>
   </div>
 
-  <div class="sidebar" id="sidebar" style="display:none">
+  <div class="app-shell" id="appShell" style="display:none">
+  <div class="sidebar nav-pane" id="sidebar" style="display:none">
     <div class="sidebar-dragbar" id="sDrag" data-tauri-drag-region>
         <div class="breadcrumbs" id="breadcrumbs"></div>
-        <button class="grid-toggle-btn" id="gridToggleBtn" data-tooltip="Toggle Grid View">
+        <button class="grid-toggle-btn" id="gridToggleBtn" data-tooltip="Toggle Grid View (G)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
         </button>
     </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Library</div>
+      <button type="button" class="nav-item active" data-nav="all"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> All Media</button>
+      <button type="button" class="nav-item" data-nav="favorites"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 21l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.18L12 21z"/></svg> Favorites</button>
+      <button type="button" class="nav-item" data-nav="rated"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> Rated 3+</button>
+      <button type="button" class="nav-item" data-nav="videos"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Videos</button>
+    </div>
+    <div class="nav-section">
+      <div class="nav-section-label">Smart Filters</div>
+      <button type="button" class="nav-item" data-nav="gps"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg> GPS</button>
+      <button type="button" class="nav-item" data-nav="raw"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg> RAW / HEIC</button>
+    </div>
+    <div class="sidebar-divider"></div>
 
     <div class="sidebar-controls">
       <button class="sidebar-btn" id="openBtn2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg> Open Folder</button>
       <button class="sidebar-btn" id="sidebarCatalogBtn" style="margin-top: 6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> Media Catalog</button>
     </div>
     <div class="sidebar-divider"></div>
-    <div class="sidebar-info">
-      <div class="counter" id="counter"></div>
-      <div class="filename" id="fname"></div>
-      <div class="dimensions" id="dims"></div>
-      <span class="format-badge" id="badge" style="display:none"></span>
-    </div>
-    <div class="sidebar-divider"></div>
     <div class="tag-filter-panel" id="tagFilterPanel">
       <span class="tag-filter-header">Filter by Tag</span>
       <div class="tag-filter-list" id="tagFilterList"></div>
     </div>
-    <div class="sidebar-divider"></div>
-    <div class="filmstrip" id="filmstrip"></div>
     <div class="sidebar-resizer" id="sidebarResizer"></div>
   </div>
 
+  <div class="main-pane" id="mainPane">
   <div class="catalog-grid-view" id="catalogGrid" style="display:none">
     <div class="catalog-header" id="cDrag" data-tauri-drag-region>
       <h2 id="catalogTitle">Catalog Grid</h2>
       <div class="catalog-header-actions">
         <button class="catalog-btn" id="catalogMapBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> Map View</button>
         <select class="catalog-btn" id="smartFilterSelect" style="height: 30px; max-width: 132px;"><option value="">All Media</option><option value="favorites">Favorites</option><option value="rated">Rated 3+</option><option value="gps">GPS</option><option value="raw">RAW/HEIC/TIFF</option></select>
-        <button class="catalog-btn" id="saveSmartAlbumBtn">Save Smart</button>
+        <button class="catalog-btn" id="saveSmartAlbumBtn" data-tooltip="Save the current catalog filter (dropdown + tags) as a reusable smart album">Save Smart</button>
         <button class="catalog-btn" id="catalogDuplicatesBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8l-6.2 4.5 2.4-7.4L2 9.4h7.6z"/></svg> Find Duplicates</button>
         <button class="catalog-btn" id="catalogFinderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2"/></svg> Finder</button>
         <button class="catalog-btn" id="catalogNewFolderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> New Folder</button>
@@ -85,39 +135,56 @@ app.innerHTML = `
         <button class="catalog-btn" id="catalogCloseBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Close Grid</button>
       </div>
     </div>
+    <div class="folio-state-host" id="catalogStateHost" aria-hidden="true"></div>
     <div class="catalog-content" id="catalogContent"></div>
-    <div class="transcode-hud" id="transcodeHud">
-      <span class="transcode-hud-title" id="transcodeCount">0 items selected</span>
-      <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 8px;"></div>
-      <button class="transcode-btn" data-fmt="webp">WebP</button>
-      <button class="transcode-btn" data-fmt="png">PNG</button>
-      <button class="transcode-btn" data-fmt="jpeg">JPEG</button>
-      <button class="transcode-btn" data-fmt="avif">AVIF</button>
-      <button class="transcode-btn" data-fmt="tiff">TIFF</button>
-      <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 8px;"></div>
-      <input type="text" id="batchTagInput" class="batch-tag-input" placeholder="Add tag (Enter)..." style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; outline: none; width: 120px;" />
-      <button class="transcode-btn" id="batchFavoriteBtn">Favorite</button>
-      <button class="transcode-btn" id="batchRateBtn">Rate 5</button>
-      <button class="transcode-btn" id="batchVaultBtn">Vault</button>
-      <button class="transcode-btn" id="batchSidecarBtn">Sidecar</button>
-      <button class="transcode-btn" id="batchFinderBtn">Finder</button>
-      <button class="transcode-btn" id="batchTrashBtn" style="color: #ff6b6b; border-color: rgba(255, 107, 107, 0.3);">Trash</button>
-      <button class="transcode-btn" id="batchScrubBtn" style="color: #ffb86c; border-color: rgba(255, 184, 108, 0.3); margin-left: 6px;">Scrub EXIF</button>
-      <button class="transcode-btn" id="transcodeClose" style="background:transparent; border-color:transparent; margin-left: 8px; display:flex; align-items:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-  </div>
-
-  <div class="map-modal" id="mapModal" style="display:none">
-    <div class="map-container">
-      <div class="map-header">
-        <span class="map-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1118 0z"/><circle cx="12" cy="10" r="3"/></svg>Image Location</span>
-        <button class="map-close-btn" id="mapCloseBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <div class="batch-bar" id="batchBar" role="region" aria-label="Batch actions">
+      <header class="batch-bar-head">
+        <div class="batch-bar-head-text">
+          <span class="batch-bar-eyebrow">Selection</span>
+          <span class="batch-bar-count" id="batchCount">0 items</span>
+        </div>
+        <button type="button" class="batch-bar-close" id="batchClose" aria-label="Clear selection">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="batch-bar-scroll">
+        <section class="batch-section">
+          <h3 class="batch-section-label">Convert</h3>
+          <div class="batch-chip-row">
+            <button type="button" class="batch-chip" data-fmt="webp">WebP</button>
+            <button type="button" class="batch-chip" data-fmt="png">PNG</button>
+            <button type="button" class="batch-chip" data-fmt="jpeg">JPEG</button>
+            <button type="button" class="batch-chip" data-fmt="avif">AVIF</button>
+            <button type="button" class="batch-chip" data-fmt="tiff">TIFF</button>
+          </div>
+        </section>
+        <section class="batch-section">
+          <h3 class="batch-section-label">Organize</h3>
+          <div class="batch-organize-row">
+            <input type="text" id="batchTagInput" class="batch-tag-input" placeholder="Add tag, press Enter" />
+            <button type="button" class="batch-chip" id="batchFavoriteBtn">Favorite</button>
+            <button type="button" class="batch-chip" id="batchRateBtn">Rate ★5</button>
+          </div>
+        </section>
+        <section class="batch-section">
+          <h3 class="batch-section-label">Files</h3>
+          <div class="batch-chip-row">
+            <button type="button" class="batch-chip" id="batchFinderBtn">Reveal in Finder</button>
+            <button type="button" class="batch-chip" id="batchSidecarBtn">Export sidecar</button>
+            <button type="button" class="batch-chip" id="batchVaultBtn">Add to vault</button>
+            <button type="button" class="batch-chip batch-chip-warn" id="batchScrubBtn">Scrub EXIF</button>
+          </div>
+        </section>
+        <section class="batch-section batch-section-danger">
+          <button type="button" class="batch-chip batch-chip-danger" id="batchTrashBtn">Move to Trash</button>
+        </section>
       </div>
-      <iframe class="map-iframe" id="mapIframe" frameborder="0" src=""></iframe>
+      <p class="batch-bar-hint">Progress appears in Inspector → Jobs</p>
     </div>
   </div>
 
   <div class="viewer" id="viewer" style="display:none">
+    <div class="folio-state-host folio-state-host--viewer" id="viewerStateHost" aria-hidden="true"></div>
     <div class="viewer-bg-base"></div>
     <div class="backdrop-glow" id="backdropGlow"></div>
     <div class="viewer-dragbar" id="vDrag" data-tauri-drag-region></div>
@@ -130,68 +197,161 @@ app.innerHTML = `
         </svg>
       </div>
     </div>
-    
-    <div class="editorial-overlay" id="editorialOverlay">
-      <div class="editorial-resizer" id="editorialResizer"></div>
-      <div class="editorial-camera" id="edCamera"></div>
-      <div class="editorial-stats">
-        <div class="editorial-stat-group"><span class="editorial-stat-label">Aperture</span><span class="editorial-stat-value" id="edAperture">—</span></div>
-        <div class="editorial-stat-group"><span class="editorial-stat-label">Shutter</span><span class="editorial-stat-value" id="edShutter">—</span></div>
-        <div class="editorial-stat-group"><span class="editorial-stat-label">ISO</span><span class="editorial-stat-value" id="edIso">—</span></div>
-        <div class="editorial-stat-group"><span class="editorial-stat-label">Focal</span><span class="editorial-stat-value" id="edFocal">—</span></div>
-      </div>
-      <div class="editorial-tech-data" id="edTechData"></div>
-      <canvas class="editorial-histogram" id="histogramCanvas" width="220" height="56" aria-hidden="true"></canvas>
-      <canvas class="editorial-waveform" id="waveformCanvas" width="220" height="80" aria-hidden="true" style="margin-top: 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); display: block;"></canvas>
-      <div class="editorial-palette" id="editorialPalette" style="margin-top: 16px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
-        <span class="editorial-stat-label">Dominant Palette</span>
-        <div id="paletteChips" style="display: flex; gap: 8px; margin-top: 4px;">
-          <div class="palette-chip" style="display: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); transition: transform var(--transition-dur-fast) var(--ease-spring), box-shadow var(--transition-dur-fast) var(--ease-spring);"></div>
-          <div class="palette-chip" style="display: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); transition: transform var(--transition-dur-fast) var(--ease-spring), box-shadow var(--transition-dur-fast) var(--ease-spring);"></div>
-          <div class="palette-chip" style="display: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); transition: transform var(--transition-dur-fast) var(--ease-spring), box-shadow var(--transition-dur-fast) var(--ease-spring);"></div>
-          <div class="palette-chip" style="display: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); transition: transform var(--transition-dur-fast) var(--ease-spring), box-shadow var(--transition-dur-fast) var(--ease-spring);"></div>
-          <div class="palette-chip" style="display: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); transition: transform var(--transition-dur-fast) var(--ease-spring), box-shadow var(--transition-dur-fast) var(--ease-spring);"></div>
-        </div>
-      </div>
-      <div class="editorial-gps" id="edGps" style="margin-top: 12px; display: none; flex-direction: column; gap: 6px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
-        <span class="editorial-stat-label">Location</span>
-        <button class="gps-chip" id="gpsChip" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: var(--accent-gold); padding: 6px 10px; border-radius: 8px; font-size: 0.72rem; cursor: pointer; display: flex; align-items: center; gap: 6px; width: fit-content; transition: all 0.25s var(--ease-spring); font-family: var(--font-body); font-weight: 500;"></button>
-        <div id="edAddress" style="font-size: 0.72rem; color: #b0b0b8; margin-top: 2px; line-height: 1.3;"></div>
-      </div>
-    </div>
+    <div class="editorial-overlay" id="editorialOverlay" aria-hidden="true" style="display:none !important;"></div>
     <button class="nav-arrow prev" id="prev">‹</button>
     <button class="nav-arrow next" id="next">›</button>
-    <div class="zoom-hud" id="zoomHud">
-      <input type="range" id="zoomSlider" min="100" max="800" value="100" step="10" />
-      <span class="zoom-label" id="zoomLabel">100%</span>
-      <button class="zoom-reset" id="zoomReset" data-tooltip="Fit to Screen (0)">FIT</button>
-      <button class="zoom-action compare-toggle-btn" id="compareBtn" data-tooltip="Compare Before/After (C)" style="display:none">COMPARE</button>
-      <button class="zoom-action fullscreen-toggle" id="fullscreenBtn" data-tooltip="Enter Fullscreen (F)">FULL</button>
-    </div>
-
-    <div class="edit-panel" id="editPanel" aria-hidden="true">
-      <div class="edit-panel-header">
-        <span class="edit-panel-title">Edit Photo</span>
-        <div class="edit-panel-actions">
-          <button class="edit-action-btn" id="editResetBtn">Reset</button>
-          <button class="edit-action-btn edit-export-btn" id="editExportBtn">Export</button>
-          <button class="edit-close-btn" id="editCloseBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        </div>
+    <div class="viewer-bottom">
+      <div class="viewer-filmstrip-wrap">
+        <div class="filmstrip viewer-filmstrip" id="filmstrip"></div>
       </div>
-      <div class="edit-sliders">
-        <div class="edit-row"><label>Brightness</label><input type="range" class="edit-slider" data-param="brightness" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
-        <div class="edit-row"><label>Vibrance</label><input type="range" class="edit-slider" data-param="vibrance" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
-      </div>
-      <div class="edit-footer" style="flex-direction: column; gap: 8px;">
-        <div style="display: flex; gap: 8px; width: 100%;">
-          <button class="edit-flip-btn" id="rotateBtn" style="flex: 1;">Rotate 90°</button>
-          <button class="edit-flip-btn" id="flipHBtn" style="flex: 1;">Flip H</button>
-          <button class="edit-flip-btn" id="flipVBtn" style="flex: 1;">Flip V</button>
+      <div class="viewer-toolbar" id="viewerToolbar">
+        <button type="button" class="vt-btn vt-btn-icon v-play-btn toolbar-video-only" id="viewerVideoPlayBtn" hidden aria-label="Play or pause">
+          <svg class="v-icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none"><polygon points="6,3 20,12 6,21"/></svg>
+          <svg class="v-icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>
+        <div class="viewer-video-scrub toolbar-video-only" id="viewerVideoScrub" hidden>
+          <input type="range" class="v-progress" id="viewerVideoProgress" value="0" min="0" max="100" step="0.1" aria-label="Seek">
+          <span class="v-time" id="viewerVideoTime">0:00 / 0:00</span>
         </div>
-        <button class="edit-flip-btn" id="cropBtn" style="width: 100%; border-color: rgba(212,167,44,0.35); color: var(--accent-gold);">Crop Photo</button>
+        <div class="viewer-toolbar-actions">
+          <div class="viewer-stars" id="viewerStars" aria-label="Rating"></div>
+          <button type="button" class="vt-btn vt-btn-icon" id="viewerFavoriteBtn" data-tooltip="Favorite" aria-label="Favorite">
+            <svg class="vt-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-4.35-9-7.5C1.5 11 2.5 7 6 5.5c2-.9 4.5-.3 6 2 1.5-2.3 4-2.9 6-2 3.5 1.5 4.5 5.5 3 8.5-2.5 3.15-9 7.5-9 7.5z"/></svg>
+          </button>
+          <button type="button" class="vt-btn vt-btn-icon" id="viewerPickBtn" data-tooltip="Pick" aria-label="Pick">
+            <svg class="vt-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18"/><path d="M5 4h12l-4 4 4 4H5"/></svg>
+          </button>
+          <div class="v-volume-container toolbar-video-only" id="viewerVideoVolWrap" hidden>
+            <button type="button" class="vt-btn vt-btn-icon v-volume-btn" id="viewerVideoVolBtn" aria-label="Mute or unmute">
+              <svg class="v-icon-volume-high" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+              <svg class="v-icon-volume-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            </button>
+            <input type="range" class="v-volume-slider" id="viewerVideoVolSlider" min="0" max="100" value="100" aria-label="Volume">
+          </div>
+        </div>
+        <span class="viewer-toolbar-divider" aria-hidden="true"></span>
+        <div class="zoom-hud-inline">
+          <input type="range" id="zoomSlider" min="100" max="800" value="100" step="10" />
+          <span class="zoom-label" id="zoomLabel">100%</span>
+          <button type="button" class="zoom-reset" id="zoomReset" data-tooltip="Fit to Screen (0)">FIT</button>
+          <button type="button" class="zoom-action compare-toggle-btn" id="compareBtn" data-tooltip="Compare (C)" style="display:none">CMP</button>
+          <button type="button" class="zoom-action fullscreen-toggle" id="fullscreenBtn" data-tooltip="Fullscreen (F)">FULL</button>
+        </div>
       </div>
     </div>
     <button class="edit-toggle-btn" id="editToggleBtn" data-tooltip="Edit Photo (E)">Edit</button>
+  </div>
+  </div>
+
+  <aside class="inspector-pane visible" id="inspectorPane">
+    <button type="button" class="inspector-edge-btn" id="inspectorCollapseBtn" aria-label="Collapse inspector" aria-expanded="true">
+      <svg class="inspector-edge-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>
+    </button>
+    <div class="inspector-inner">
+    <div class="inspector-header">
+      <div class="inspector-tabs" role="tablist">
+        <button type="button" class="inspector-tab active" data-inspector="info" role="tab">Info</button>
+        <button type="button" class="inspector-tab" data-inspector="adjust" role="tab">Adjust</button>
+        <button type="button" class="inspector-tab" data-inspector="presets" role="tab">Presets</button>
+        <button type="button" class="inspector-tab" data-inspector="jobs" role="tab">Jobs</button>
+      </div>
+    </div>
+    <div class="inspector-body">
+      <div class="inspector-panel active" id="inspectorInfo" data-panel="info">
+        <div class="inspector-card inspector-meta">
+          <div class="inspector-card-title">File</div>
+          <div class="counter" id="counter"></div>
+          <div class="filename" id="fname"></div>
+          <div class="dimensions" id="dims"></div>
+          <span class="format-badge" id="badge" style="display:none"></span>
+        </div>
+        <div class="inspector-card">
+          <div class="inspector-card-title">Camera</div>
+          <div class="editorial-camera" id="edCamera" style="font-size:13px;color:var(--text-primary);margin-bottom:8px;"></div>
+          <div class="inspector-exif-grid">
+            <div class="inspector-exif-item"><span>Aperture</span><span id="edAperture">—</span></div>
+            <div class="inspector-exif-item"><span>Shutter</span><span id="edShutter">—</span></div>
+            <div class="inspector-exif-item"><span>ISO</span><span id="edIso">—</span></div>
+            <div class="inspector-exif-item"><span>Focal</span><span id="edFocal">—</span></div>
+          </div>
+          <div class="editorial-tech-data" id="edTechData" style="margin-top:10px;font-size:11px;color:var(--text-tertiary);"></div>
+        </div>
+        <div class="inspector-card">
+          <div class="inspector-card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span>Analysis</span>
+            <button type="button" class="settings-update-btn" id="classifySuggestBtn" style="padding:4px 8px;font-size:10px;">Suggest tags</button>
+          </div>
+          <div id="classifyResults" class="classify-results" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+          <canvas class="editorial-histogram" id="histogramCanvas" width="260" height="56" aria-hidden="true" style="width:100%;max-width:100%;border-radius:6px;"></canvas>
+          <canvas class="editorial-waveform" id="waveformCanvas" width="260" height="64" aria-hidden="true" style="width:100%;max-width:100%;margin-top:8px;border-radius:6px;border:1px solid var(--border-subtle);"></canvas>
+          <div class="editorial-palette" id="editorialPalette" style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">
+            <span class="inspector-card-title" style="margin-bottom:0;">Dominant palette</span>
+            <div id="paletteChips" style="display:flex;gap:8px;margin-top:4px;">
+              <div class="palette-chip" style="display:none;width:20px;height:20px;border-radius:50%;cursor:pointer;border:1px solid var(--border-hover);"></div>
+              <div class="palette-chip" style="display:none;width:20px;height:20px;border-radius:50%;cursor:pointer;border:1px solid var(--border-hover);"></div>
+              <div class="palette-chip" style="display:none;width:20px;height:20px;border-radius:50%;cursor:pointer;border:1px solid var(--border-hover);"></div>
+              <div class="palette-chip" style="display:none;width:20px;height:20px;border-radius:50%;cursor:pointer;border:1px solid var(--border-hover);"></div>
+              <div class="palette-chip" style="display:none;width:20px;height:20px;border-radius:50%;cursor:pointer;border:1px solid var(--border-hover);"></div>
+            </div>
+          </div>
+        </div>
+        <div class="inspector-card editorial-gps" id="edGps" style="display:none;flex-direction:column;gap:8px;">
+          <div class="inspector-card-title">Location</div>
+          <button type="button" class="gps-chip" id="gpsChip"></button>
+          <div id="edAddress" class="gps-address"></div>
+        </div>
+        <div class="editorial-resizer" id="editorialResizer" style="display:none;"></div>
+      </div>
+      <div class="inspector-panel" id="inspectorAdjust" data-panel="adjust">
+        <div class="edit-panel" id="editPanel" aria-hidden="false">
+          <div class="edit-panel-header">
+            <span class="edit-panel-title">Adjustments</span>
+            <div class="edit-panel-actions">
+              <button class="edit-action-btn" id="editResetBtn">Reset</button>
+              <button class="edit-action-btn edit-export-btn" id="editExportBtn">Export</button>
+              <button class="edit-close-btn" id="editCloseBtn" title="Close adjust tab" style="display:none;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+          </div>
+          <div class="edit-sliders">
+            <div class="edit-section-label">Light</div>
+            <div class="edit-row"><label>Exposure</label><input type="range" class="edit-slider" data-param="exposure" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+            <div class="edit-row"><label>Brightness</label><input type="range" class="edit-slider" data-param="brightness" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+            <div class="edit-row"><label>Contrast</label><input type="range" class="edit-slider" data-param="contrast" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+            <div class="edit-section-label">Color</div>
+            <div class="edit-row"><label>Saturation</label><input type="range" class="edit-slider" data-param="saturation" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+            <div class="edit-row"><label>Vibrance</label><input type="range" class="edit-slider" data-param="vibrance" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+            <div class="edit-row"><label>Warmth</label><input type="range" class="edit-slider" data-param="warmth" min="-100" max="100" step="1" value="0"><span class="edit-val">0</span></div>
+          </div>
+          <div class="edit-footer" style="flex-direction:column;gap:8px;">
+            <div style="display:flex;gap:8px;width:100%;">
+              <button class="edit-flip-btn" id="rotateBtn" style="flex:1;">Rotate 90°</button>
+              <button class="edit-flip-btn" id="flipHBtn" style="flex:1;">Flip H</button>
+              <button class="edit-flip-btn" id="flipVBtn" style="flex:1;">Flip V</button>
+            </div>
+            <button class="edit-flip-btn" id="cropBtn" style="width:100%;border-color:rgba(212,167,44,0.35);color:var(--accent-gold);">Crop Photo</button>
+          </div>
+        </div>
+      </div>
+      <div class="inspector-panel" id="inspectorPresets" data-panel="presets">
+        <div class="inspector-card">
+          <div class="inspector-card-title">Presets</div>
+          <p class="inspector-presets-hint">Apply a look in one tap. Save your current sliders as a custom preset.</p>
+          <div class="edit-preset-grid" id="editPresetGrid"></div>
+          <button type="button" class="edit-preset-save-btn" id="saveEditPresetBtn">Save current adjustments</button>
+        </div>
+      </div>
+      <div class="inspector-panel" id="inspectorJobs" data-panel="jobs">
+        <div class="batch-jobs-list" id="batchJobsList">
+          <p class="batch-jobs-empty" id="batchJobsEmpty">No active batch jobs.</p>
+        </div>
+      </div>
+    </div>
+    </div>
+  </aside>
+  </div>
+
+  <div class="gps-popover" id="gpsPopover" aria-hidden="true">
+    <iframe class="gps-popover-map" id="gpsPopoverIframe" title="Location map" tabindex="-1"></iframe>
   </div>
 
   <div class="image-fullscreen" id="imageFullscreen" aria-hidden="true" style="display:none">
@@ -202,71 +362,55 @@ app.innerHTML = `
     </div>
   </div>
 
-  <div class="settings-modal" id="settingsModal" style="display:none">
-    <div class="settings-bg" id="settingsBg"></div>
-    <div class="settings-content">
-      <div class="settings-header">
-        <h2>Settings</h2>
-        <button class="settings-close" id="settingsClose"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-      </div>
-      <div class="settings-body">
-        <div class="settings-tabs">
-          <button class="tab-btn active" data-tab="general">General</button>
-          <button class="tab-btn" data-tab="appearance">Appearance</button>
-          <button class="tab-btn" data-tab="storage">Storage</button>
-          <button class="tab-btn" data-tab="keybinds">Keybinds</button>
-          <button class="tab-btn" data-tab="security">Security</button>
+  <div class="settings-page" id="settingsPage" style="display:none" aria-hidden="true">
+    <div class="settings-layout">
+      <aside class="settings-nav">
+        <div class="settings-nav-chrome" id="settingsDrag" data-tauri-drag-region></div>
+        <div class="settings-nav-inner">
+          <button type="button" class="settings-back" id="settingsBack">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            Back
+          </button>
+          <h1 class="settings-nav-title">Settings</h1>
+          <nav class="settings-categories" role="tablist">
+            <button type="button" class="settings-nav-item active" role="tab" data-tab="general">General</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="appearance">Appearance</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="catalog">Catalog</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="cache">Cache</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="export">Export</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="shortcuts">Shortcuts</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="security">Security</button>
+            <button type="button" class="settings-nav-item" role="tab" data-tab="advanced">Advanced</button>
+          </nav>
         </div>
+      </aside>
+      <main class="settings-main">
+        <header class="settings-main-head" data-tauri-drag-region>
+          <h2 class="settings-pane-title" id="settingsPaneTitle">General</h2>
+        </header>
+        <div class="settings-main-body">
 
         <div class="tab-pane active" id="tab-general">
-          <div class="settings-section-label">Interface</div>
-          <div class="setting-row">
-            <label for="sortSelect">Sort By</label>
-            <select id="sortSelect">
-              <option value="name">Name</option>
-              <option value="date">Date</option>
-              <option value="size">Size</option>
-            </select>
+          <div class="settings-section-label">Setup</div>
+          <div class="setting-row" style="margin-top: 0;">
+            <label>Show onboarding again</label>
+            <button type="button" class="settings-update-btn" id="resetOnboardingBtn">Replay setup</button>
           </div>
           <div class="setting-row">
-           <label for="zoomSensSlider">Zoom Sensitivity</label>
-           <input type="range" id="zoomSensSlider" min="1" max="10" value="5" style="width: 120px;" />
+            <label>Recent folders on home</label>
+            <button type="button" class="settings-update-btn" id="clearRecentsSettingsBtn">Clear recents</button>
           </div>
-          <div class="setting-row">
-            <label for="recentFoldersCheck">Show Recent Folders</label>
-            <input type="checkbox" id="recentFoldersCheck" checked />
+          <div class="settings-section-label" style="margin-top: 12px;">Default app (macOS)</div>
+          <div class="setting-row" style="flex-wrap: wrap; gap: 8px; justify-content: flex-start;">
+            <button type="button" class="settings-update-btn" id="setDefaultAppBtn">Set as default for media</button>
+            <button type="button" class="settings-update-btn" id="openWithHelpBtn">Finder Open With help</button>
           </div>
+          <div class="settings-section-label" style="margin-top: 12px;">Feedback</div>
           <div class="setting-row">
             <label for="soundVolumeSlider">UI Sound Volume</label>
             <div style="display: flex; align-items: center; gap: 8px;">
               <input type="range" id="soundVolumeSlider" min="0" max="100" value="40" style="width: 100px;" />
               <span class="setting-val" id="soundVolumeVal" style="font-size: 0.7rem; color: var(--text-tertiary); min-width: 32px; text-align: right; font-variant-numeric: tabular-nums;">40%</span>
-            </div>
-          </div>
-          <div class="settings-section-label">Export</div>
-          <div class="setting-row">
-            <label for="stripMetadataCheck">Scrub EXIF Metadata</label>
-            <input type="checkbox" id="stripMetadataCheck" />
-          </div>
-          <div>
-            <div class="watermark-toggle-row">
-              <label for="watermarkToggle">Export Watermark</label>
-              <input type="checkbox" id="watermarkToggle" />
-            </div>
-            <div class="watermark-input-row" id="watermarkInputRow" style="display: flex; gap: 8px;">
-              <input type="text" id="watermarkInput" placeholder="Enter watermark text…" style="flex: 1;" />
-              <select id="watermarkAnchorSelect" style="width: 120px;">
-                 <option value="bottom-right">Bottom Right</option>
-                 <option value="bottom-left">Bottom Left</option>
-                 <option value="top-right">Top Right</option>
-                 <option value="top-left">Top Left</option>
-                 <option value="center">Center</option>
-              </select>
-            </div>
-            <div class="watermark-input-row" id="watermarkAdvancedRow" style="display: flex; gap: 8px; margin-top: 8px;">
-              <input type="range" id="watermarkOpacitySlider" min="10" max="100" value="70" />
-              <input type="range" id="watermarkScaleSlider" min="50" max="200" value="100" />
-              <input type="range" id="watermarkFontSlider" min="12" max="72" value="32" />
             </div>
           </div>
         </div>
@@ -288,16 +432,8 @@ app.innerHTML = `
             </select>
           </div>
           <div class="setting-row">
-            <label for="reverseGeocodeCheck">Look up addresses from GPS coordinates</label>
-            <input type="checkbox" id="reverseGeocodeCheck" />
-          </div>
-          <div class="setting-row">
             <label for="vibrancyCheck">Enable Window Vibrancy</label>
             <input type="checkbox" id="vibrancyCheck" />
-          </div>
-          <div class="setting-row">
-            <label for="customCursorCheck">Use Custom Cursor</label>
-            <input type="checkbox" id="customCursorCheck" checked />
           </div>
           <div class="setting-row">
             <label for="cinematicCheck">Enable Cinematic Transitions</label>
@@ -311,53 +447,87 @@ app.innerHTML = `
             <label for="reducedMotionCheck">Reduce UI Motion</label>
             <input type="checkbox" id="reducedMotionCheck" />
           </div>
-          <div class="setting-row">
-            <label for="performanceHudCheck">Show Performance HUD</label>
-            <input type="checkbox" id="performanceHudCheck" />
-          </div>
         </div>
 
-        <div class="tab-pane" id="tab-storage">
-          <div class="settings-section-label">Database & Cache Diagnostics</div>
+        <div class="tab-pane" id="tab-catalog">
+          <div class="settings-section-label">Library & grid</div>
           <div class="setting-row">
-            <span class="setting-label">SQLite Database Size</span>
-            <span class="setting-val" id="dbSizeVal">—</span>
+            <label for="sortSelect">Sort media by</label>
+            <select id="sortSelect">
+              <option value="name">Name</option>
+              <option value="date">Date</option>
+              <option value="size">Size</option>
+            </select>
           </div>
           <div class="setting-row">
-            <span class="setting-label">Thumbnail Cache Size</span>
-            <span class="setting-val" id="cacheSizeVal">—</span>
+            <label for="recentFoldersCheck">Show recent folders on home</label>
+            <input type="checkbox" id="recentFoldersCheck" checked />
           </div>
           <div class="setting-row">
-            <label for="thumbCacheLimitInput">Thumbnail Cache Limit (GB)</label>
-            <input id="thumbCacheLimitInput" type="number" min="0.25" max="100" step="0.25" value="2" style="width: 90px;" />
-          </div>
-          <div class="setting-row">
-            <label for="prefetchCheck">Navigation Prefetch</label>
+            <label for="prefetchCheck">Prefetch adjacent media</label>
             <input type="checkbox" id="prefetchCheck" checked />
           </div>
-          <div class="setting-row">
-            <span class="setting-label">Decoded Image Cache Size</span>
-            <span class="setting-val" id="decodedSizeVal">—</span>
+          <p class="settings-hint">Catalog grid size: ⌘ + / ⌘ − while grid view is open.</p>
+        </div>
+
+        <div class="tab-pane" id="tab-cache">
+          <div class="settings-section-label">Storage overview</div>
+          <div class="settings-stat-grid">
+            <div class="settings-stat"><span class="settings-stat-label">Database</span><span class="settings-stat-val" id="dbSizeVal">—</span></div>
+            <div class="settings-stat"><span class="settings-stat-label">Thumbnails</span><span class="settings-stat-val" id="cacheSizeVal">—</span></div>
+            <div class="settings-stat"><span class="settings-stat-label">Decoded</span><span class="settings-stat-val" id="decodedSizeVal">—</span></div>
           </div>
-          <div class="settings-section-label">Runtime Engine Statistics</div>
           <div class="setting-row">
-            <span class="setting-label">CPU Engine Load</span>
-            <span class="setting-val" id="cpuLoadVal">—</span>
+            <label for="thumbCacheLimitInput">Thumbnail limit (GB)</label>
+            <input id="thumbCacheLimitInput" type="number" min="0.25" max="100" step="0.25" value="2" class="settings-num-input" />
+            <label for="decodedCacheLimitInput">Decoded limit (GB)</label>
+            <input id="decodedCacheLimitInput" type="number" min="0.5" max="100" step="0.5" value="4" class="settings-num-input" />
           </div>
-          <div class="setting-row">
-            <span class="setting-label">RAM Memory Usage</span>
-            <span class="setting-val" id="ramSizeVal">—</span>
-          </div>
-          <div class="setting-row" style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 16px; justify-content: flex-start;">
-            <button class="settings-update-btn" id="purgeCacheBtn" style="background: #e03131 !important; color: #fff !important; font-weight: bold; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.25s ease;">Purge All Local Cache</button>
-            <button class="settings-update-btn" id="pruneThumbCacheBtn" style="margin-left: 8px;">Prune Thumbnails</button>
+          <div class="settings-section-label" style="margin-top: 16px;">Clear cache</div>
+          <p class="settings-hint">Cache clears keep tags, ratings, and albums. Use “Reset library metadata” to remove those.</p>
+          <p class="folio-inline-status" id="cacheActionStatus" aria-live="polite"></p>
+          <div class="settings-action-grid">
+            <button type="button" class="settings-action-btn" id="clearThumbsBtn">Clear thumbnails</button>
+            <button type="button" class="settings-action-btn" id="clearDecodedBtn">Clear decoded images</button>
+            <button type="button" class="settings-action-btn" id="clearMetadataBtn">Clear metadata index</button>
+            <button type="button" class="settings-action-btn" id="pruneThumbCacheBtn">Prune to limit</button>
+            <button type="button" class="settings-action-btn settings-action-btn-danger" id="purgeCacheBtn">Clear all local cache</button>
+            <button type="button" class="settings-action-btn settings-action-btn-danger" id="resetLibraryMetadataBtn">Reset library metadata</button>
           </div>
         </div>
 
-        <div class="tab-pane" id="tab-keybinds">
+        <div class="tab-pane" id="tab-export">
+          <div class="settings-section-label">Privacy</div>
           <div class="setting-row">
-            <label style="font-size: 0.85rem; color: var(--text-primary); font-weight: 500;">Keybindings</label>
-            <button class="settings-update-btn" id="resetKeybindsBtn">Reset Defaults</button>
+            <label for="stripMetadataCheck">Scrub EXIF on export</label>
+            <input type="checkbox" id="stripMetadataCheck" />
+          </div>
+          <div class="settings-section-label" style="margin-top: 12px;">Watermark</div>
+          <div class="watermark-toggle-row">
+            <label for="watermarkToggle">Add watermark on export</label>
+            <input type="checkbox" id="watermarkToggle" />
+          </div>
+          <div class="watermark-input-row" id="watermarkInputRow" style="display: flex; gap: 8px; margin-top: 8px;">
+            <input type="text" id="watermarkInput" placeholder="Watermark text…" style="flex: 1;" />
+            <select id="watermarkAnchorSelect" style="width: 120px;">
+              <option value="bottom-right">Bottom Right</option>
+              <option value="bottom-left">Bottom Left</option>
+              <option value="top-right">Top Right</option>
+              <option value="top-left">Top Left</option>
+              <option value="center">Center</option>
+            </select>
+          </div>
+          <div class="watermark-input-row" id="watermarkAdvancedRow" style="display: flex; gap: 8px; margin-top: 8px;">
+            <input type="range" id="watermarkOpacitySlider" min="10" max="100" value="70" title="Opacity" />
+            <input type="range" id="watermarkScaleSlider" min="50" max="200" value="100" title="Scale" />
+            <input type="range" id="watermarkFontSlider" min="12" max="72" value="32" title="Font size" />
+          </div>
+        </div>
+
+        <div class="tab-pane" id="tab-shortcuts">
+          <div class="setting-row">
+            <label style="font-size: 0.85rem; color: var(--text-primary); font-weight: 500;">Keyboard shortcuts</label>
+            <button class="settings-update-btn" id="resetKeybindsBtn">Reset defaults</button>
           </div>
           <div class="setting-row">
             <label>Next Image</label>
@@ -411,9 +581,41 @@ app.innerHTML = `
             <label>Toggle Catalog Grid</label>
             <button class="keybind-btn" data-action="toggleCatalog"></button>
           </div>
+          <div class="setting-row">
+            <label>Go home (close library)</label>
+            <button class="keybind-btn" data-action="goHome"></button>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="tab-advanced">
+          <div class="settings-section-label">Diagnostics</div>
+          <div class="setting-row">
+            <label for="performanceHudCheck">Show performance HUD</label>
+            <input type="checkbox" id="performanceHudCheck" />
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">CPU load</span>
+            <span class="setting-val" id="cpuLoadVal">—</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">Memory usage</span>
+            <span class="setting-val" id="ramSizeVal">—</span>
+          </div>
+          <div class="settings-section-label" style="margin-top: 12px;">Viewer</div>
+          <div class="setting-row">
+            <label for="zoomSensSlider">Zoom sensitivity (Shift + scroll)</label>
+            <input type="range" id="zoomSensSlider" min="1" max="10" value="5" style="width: 120px;" />
+          </div>
+          <div class="settings-section-label" style="margin-top: 12px;">Location</div>
+          <div class="setting-row">
+            <label for="reverseGeocodeCheck">Look up addresses from GPS</label>
+            <input type="checkbox" id="reverseGeocodeCheck" />
+          </div>
+          <p class="settings-hint">Map popups always try to resolve an address when online.</p>
         </div>
 
         <div class="tab-pane" id="tab-security">
+          <div class="vault-status-banner" id="vaultStatusBanner" role="status" aria-live="polite"></div>
           <div class="setting-row">
             <span style="font-size: 0.85rem; color: var(--text-primary); font-weight: 500;">Secure Album Vault & Platform Settings</span>
           </div>
@@ -423,12 +625,13 @@ app.innerHTML = `
           </div>
           <div class="setting-row">
             <label for="vaultAutoLockInput">Vault Auto-Lock Minutes</label>
-            <input id="vaultAutoLockInput" type="number" min="1" max="120" value="5" style="width: 90px;" />
+            <input id="vaultAutoLockInput" class="settings-num-input" type="number" min="1" max="120" value="5" />
           </div>
           <div class="setting-row" style="gap: 8px; justify-content: flex-start;">
             <button class="settings-update-btn" id="vaultCreateBtn">Create Vault</button>
             <button class="settings-update-btn" id="vaultUnlockBtn">Unlock</button>
             <button class="settings-update-btn" id="vaultLockBtn">Lock</button>
+            <button class="settings-update-btn" id="vaultRepairBtn">Repair catalog</button>
             <span class="setting-val" id="vaultStatusVal">Vault locked</span>
           </div>
           <div class="setting-row" style="margin-top: 10px; flex-direction: column; align-items: flex-start; gap: 8px;">
@@ -446,7 +649,8 @@ app.innerHTML = `
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      </main>
     </div>
   </div>
 
@@ -462,7 +666,6 @@ app.innerHTML = `
     <div class="performance-hud-item"><span class="performance-hud-label">CPU Load</span><span class="performance-hud-value" id="hudCpuVal">0.0%</span></div>
     <div class="performance-hud-item"><span class="performance-hud-label">App Memory</span><span class="performance-hud-value" id="hudMemoryVal">0 MB</span></div>
   </div>
-  <div class="custom-cursor" id="customCursor"></div>
   <div class="dropzone-glow" id="dropzoneGlow"></div>
   <div id="toastContainer" class="toast-container"></div>
   <svg width="0" height="0" style="position: absolute; pointer-events: none;">
@@ -476,7 +679,7 @@ app.innerHTML = `
 
 /* ── DOM REFS ── */
 const $ = id => document.getElementById(id);
-const welcome = $('welcome'), welcomeBg = $('welcomeBg'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), customCursor = $('customCursor'), customCursorCheck = $('customCursorCheck'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), reverseGeocodeCheck = $('reverseGeocodeCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogFinderBtn = $('catalogFinderBtn'), catalogMapBtn = $('catalogMapBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), smartFilterSelect = $('smartFilterSelect'), saveSmartAlbumBtn = $('saveSmartAlbumBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), edAddress = $('edAddress'), mapModal = $('mapModal'), mapCloseBtn = $('mapCloseBtn'), mapIframe = $('mapIframe'), compareBtn = $('compareBtn'), transcodeHud = $('transcodeHud'), transcodeCount = $('transcodeCount'), transcodeClose = $('transcodeClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput'), watermarkAnchorSelect = $('watermarkAnchorSelect'), watermarkOpacitySlider = $('watermarkOpacitySlider'), watermarkScaleSlider = $('watermarkScaleSlider'), watermarkFontSlider = $('watermarkFontSlider'), batchTagInput = $('batchTagInput'), batchTrashBtn = $('batchTrashBtn'), batchFavoriteBtn = $('batchFavoriteBtn'), batchRateBtn = $('batchRateBtn'), batchVaultBtn = $('batchVaultBtn'), batchSidecarBtn = $('batchSidecarBtn'), batchFinderBtn = $('batchFinderBtn');
+const welcome = $('welcome'), sidebar = $('sidebar'), sidebarResizer = $('sidebarResizer'), sidebarToggle = $('sidebarToggle'), viewer = $('viewer'), media = $('media'), mediaLoader = $('mediaLoader'), filmstrip = $('filmstrip'), breadcrumbs = $('breadcrumbs'), gridToggleBtn = $('gridToggleBtn'), counter = $('counter'), fname = $('fname'), dims = $('dims'), badge = $('badge'), edOverlay = $('editorialOverlay'), edCamera = $('edCamera'), edAperture = $('edAperture'), edShutter = $('edShutter'), edIso = $('edIso'), edFocal = $('edFocal'), edTechData = $('edTechData'), backdropGlow = $('backdropGlow'), editPanel = $('editPanel'), editToggleBtn = $('editToggleBtn'), editCloseBtn = $('editCloseBtn'), editResetBtn = $('editResetBtn'), editExportBtn = $('editExportBtn'), rotateBtn = $('rotateBtn'), flipHBtn = $('flipHBtn'), flipVBtn = $('flipVBtn'), cropBtn = $('cropBtn'), dropzoneGlow = $('dropzoneGlow'), zoomSlider = $('zoomSlider'), zoomLabel = $('zoomLabel'), zoomReset = $('zoomReset'), fullscreenBtn = $('fullscreenBtn'), imageFsExit = $('imageFsExit'), sortSelect = $('sortSelect'), zoomSensSlider = $('zoomSensSlider'), themeSelect = $('themeSelect'), cinematicCheck = $('cinematicCheck'), recentFoldersCheck = $('recentFoldersCheck'), stripMetadataCheck = $('stripMetadataCheck'), vibrancyCheck = $('vibrancyCheck'), reverseGeocodeCheck = $('reverseGeocodeCheck'), soundVolumeSlider = $('soundVolumeSlider'), soundVolumeVal = $('soundVolumeVal'), catalogGrid = $('catalogGrid'), catalogContent = $('catalogContent'), catalogStateHost = $('catalogStateHost'), viewerStateHost = $('viewerStateHost'), catalogTitle = $('catalogTitle'), catalogNewFolderBtn = $('catalogNewFolderBtn'), catalogFinderBtn = $('catalogFinderBtn'), catalogMapBtn = $('catalogMapBtn'), catalogDuplicatesBtn = $('catalogDuplicatesBtn'), catalogCloseBtn = $('catalogCloseBtn'), smartFilterSelect = $('smartFilterSelect'), saveSmartAlbumBtn = $('saveSmartAlbumBtn'), tagFilterPanel = $('tagFilterPanel'), tagFilterList = $('tagFilterList'), sidebarCatalogBtn = $('sidebarCatalogBtn'), edGps = $('edGps'), gpsChip = $('gpsChip'), edAddress = $('edAddress'), compareBtn = $('compareBtn'), batchBar = $('batchBar'), batchCount = $('batchCount'), batchClose = $('batchClose'), colorBlindSelect = $('colorBlindSelect'), watermarkInput = $('watermarkInput'), watermarkAnchorSelect = $('watermarkAnchorSelect'), watermarkOpacitySlider = $('watermarkOpacitySlider'), watermarkScaleSlider = $('watermarkScaleSlider'), watermarkFontSlider = $('watermarkFontSlider'), batchTagInput = $('batchTagInput'), batchTrashBtn = $('batchTrashBtn'), batchFavoriteBtn = $('batchFavoriteBtn'), batchRateBtn = $('batchRateBtn'), batchVaultBtn = $('batchVaultBtn'), batchSidecarBtn = $('batchSidecarBtn'), batchFinderBtn = $('batchFinderBtn');
 
 // DOM Refs for Phase 2 Responsive Workspace & Fine-Grained Controls
 const highContrastCheck = $('highContrastCheck'),
@@ -488,8 +691,16 @@ const highContrastCheck = $('highContrastCheck'),
       ramSizeVal = $('ramSizeVal'),
       cpuLoadVal = $('cpuLoadVal'),
       purgeCacheBtn = $('purgeCacheBtn'),
+      resetLibraryMetadataBtn = $('resetLibraryMetadataBtn'),
+      clearThumbsBtn = $('clearThumbsBtn'),
+      clearDecodedBtn = $('clearDecodedBtn'),
+      clearMetadataBtn = $('clearMetadataBtn'),
+      cacheActionStatus = $('cacheActionStatus'),
       pruneThumbCacheBtn = $('pruneThumbCacheBtn'),
+      settingsPage = $('settingsPage'),
+      settingsPaneTitle = $('settingsPaneTitle'),
       thumbCacheLimitInput = $('thumbCacheLimitInput'),
+      decodedCacheLimitInput = $('decodedCacheLimitInput'),
       prefetchCheck = $('prefetchCheck'),
       performanceHud = $('performanceHud'),
       editorialResizer = $('editorialResizer');
@@ -505,7 +716,8 @@ const biometricVaultCheck = $('biometricVaultCheck'),
       vaultUnlockBtn = $('vaultUnlockBtn'),
       vaultLockBtn = $('vaultLockBtn'),
       vaultStatusVal = $('vaultStatusVal'),
-      vaultAutoLockInput = $('vaultAutoLockInput');
+      vaultAutoLockInput = $('vaultAutoLockInput'),
+      vaultStatusBanner = $('vaultStatusBanner');
 
 // Utility: Debounce for disk-bound I/O reduction (Finding 3)
 function debounce(fn, delay) {
@@ -591,7 +803,10 @@ const FolioState = {
   isScrubbingActive: false,
   activeThumbEl: null,
   catalogVisibleCount: 100,
+};
+globalThis.FolioState = FolioState;
 
+Object.assign(FolioState, {
   settings: {
     get currentSort() { return currentSort; },
     set currentSort(v) { currentSort = v; localStorage.setItem('folio_sort', v); },
@@ -601,8 +816,6 @@ const FolioState = {
     set currentTheme(v) { currentTheme = v; localStorage.setItem('folio_theme', v); },
     get cinematicEnabled() { return cinematicEnabled; },
     set cinematicEnabled(v) { cinematicEnabled = v; localStorage.setItem('folio_cinematic', v); },
-    get useCustomCursor() { return useCustomCursor; },
-    set useCustomCursor(v) { useCustomCursor = v; localStorage.setItem('folio_custom_cursor', v); },
     get showRecentFolders() { return showRecentFolders; },
     set showRecentFolders(v) { showRecentFolders = v; localStorage.setItem('folio_show_recents', v); },
     get stripMetadataEnabled() { return stripMetadataEnabled; },
@@ -618,9 +831,164 @@ const FolioState = {
     get activeWatermark() { return activeWatermark; },
     set activeWatermark(v) { activeWatermark = v; localStorage.setItem('folio_watermark', v); }
   }
-};
+});
 
 let catalogModeActive = false;
+let inspectorPaneVisible = true;
+let openedLibraryPath = null;
+const batchJobRows = new Map();
+
+const appShell = $('appShell');
+const inspectorPane = $('inspectorPane');
+const inspectorCollapseBtn = $('inspectorCollapseBtn');
+const gpsPopover = $('gpsPopover');
+const gpsPopoverIframe = $('gpsPopoverIframe');
+const batchJobsList = $('batchJobsList');
+const batchJobsEmpty = $('batchJobsEmpty');
+const resetOnboardingBtn = $('resetOnboardingBtn');
+
+function setAppShellVisible(visible) {
+  if (appShell) appShell.style.display = visible ? 'flex' : 'none';
+}
+
+function showHomeHub(animate = false) {
+  welcome?.classList.remove('hidden');
+  if (welcome) welcome.style.display = '';
+  setAppShellVisible(false);
+  renderHomeHub();
+  if (animate && welcome && !reducedMotionEnabled) {
+    welcome.classList.add('home-entering');
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => welcome.classList.remove('home-entering'));
+    });
+  }
+}
+
+function goHome() {
+  if (!items.length && !openedLibraryPath) return;
+  closeGpsPopover();
+  const finish = () => {
+    catalogModeActive = false;
+    closeEditPanel();
+    closeCropMode();
+    adjustPreviewActive = false;
+    editSessionPath = null;
+    items = [];
+    idx = 0;
+    openedLibraryPath = null;
+    selectedCatalogPaths?.clear?.();
+    if (filmstrip) filmstrip.innerHTML = '';
+    if (sidebar) sidebar.style.display = 'none';
+    if (viewer) viewer.style.display = 'none';
+    if (catalogGrid) catalogGrid.style.display = 'none';
+    appShell?.classList.remove('shell-exiting');
+    showHomeHub(true);
+  };
+  if (!appShell || reducedMotionEnabled) {
+    finish();
+    return;
+  }
+  appShell.classList.add('shell-exiting');
+  setTimeout(finish, 260);
+}
+
+function setInspectorVisible(visible) {
+  inspectorPaneVisible = visible;
+  if (!inspectorPane) return;
+  inspectorPane.classList.toggle('visible', visible);
+  inspectorPane.classList.toggle('collapsed', !visible);
+  inspectorPane.style.display = 'flex';
+  inspectorCollapseBtn?.setAttribute('aria-expanded', visible ? 'true' : 'false');
+  inspectorCollapseBtn?.setAttribute('aria-label', visible ? 'Collapse inspector' : 'Expand inspector');
+  appShell?.classList.toggle('inspector-collapsed', !visible);
+  requestAnimationFrame(() => {
+    if (zoom > 1) scheduleUpdate();
+    else resetZoom();
+  });
+}
+
+function setInspectorTab(tabId) {
+  document.querySelectorAll('.inspector-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.inspector === tabId);
+  });
+  document.querySelectorAll('.inspector-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.panel === tabId);
+  });
+}
+
+function updateWorkspaceLayout() {
+  if (!items.length) {
+    if (openedLibraryPath) {
+      welcome?.classList.add('hidden');
+      setAppShellVisible(true);
+      if (sidebar) sidebar.style.display = catalogModeActive ? 'none' : 'flex';
+      if (viewer) viewer.style.display = catalogModeActive ? 'none' : 'flex';
+      if (catalogGrid) catalogGrid.style.display = catalogModeActive ? 'grid' : 'none';
+    } else {
+      showHomeHub();
+    }
+    return;
+  }
+  welcome?.classList.add('hidden');
+  setAppShellVisible(true);
+  if (catalogModeActive) {
+    if (sidebar) sidebar.style.display = 'none';
+    if (viewer) viewer.style.display = 'none';
+    if (catalogGrid) catalogGrid.style.display = 'grid';
+    setInspectorVisible(false);
+  } else {
+    if (catalogGrid) catalogGrid.style.display = 'none';
+    if (sidebar) sidebar.style.display = 'flex';
+    if (viewer) viewer.style.display = 'flex';
+    setInspectorVisible(inspectorPaneVisible);
+  }
+}
+
+function applyNavFilter(navKey) {
+  const map = { all: '', favorites: 'favorites', rated: 'rated', videos: 'videos', gps: 'gps', raw: 'raw' };
+  activeSmartFilter = map[navKey] ?? '';
+  if (smartFilterSelect) smartFilterSelect.value = activeSmartFilter;
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.nav === navKey);
+  });
+  applyFilters();
+  if (catalogModeActive) buildCatalogContent();
+}
+
+function upsertBatchJobRow(jobId, label, status) {
+  if (!batchJobsList) return;
+  batchJobsEmpty?.style.setProperty('display', 'none');
+  let row = batchJobRows.get(jobId);
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'batch-job-row';
+    row.dataset.jobId = jobId;
+    row.innerHTML = `
+      <div class="batch-job-name"></div>
+      <div class="batch-job-bar"><div class="batch-job-fill"></div></div>
+      <div class="batch-job-status"></div>`;
+    batchJobsList.appendChild(row);
+    batchJobRows.set(jobId, row);
+  }
+  const pct = status?.total ? Math.round((status.completed / status.total) * 100) : 0;
+  row.querySelector('.batch-job-name').textContent = label;
+  row.querySelector('.batch-job-fill').style.width = `${pct}%`;
+  const state = status?.state || 'running';
+  row.querySelector('.batch-job-status').textContent =
+    state === 'completed' ? `Completed · ${status.completed}/${status.total}` :
+    state === 'failed' ? `Failed · ${status.failed || 0} errors` :
+    state === 'cancelled' ? 'Cancelled' : `Running · ${status.completed || 0}/${status.total || '?'}`;
+  if (['completed', 'failed', 'cancelled'].includes(state)) {
+    setTimeout(() => {
+      row.remove();
+      batchJobRows.delete(jobId);
+      if (batchJobRows.size === 0 && batchJobsEmpty) {
+        batchJobsEmpty.style.display = 'block';
+      }
+    }, 8000);
+  }
+}
+
 let compareModeActive = false;
 let compareClipPct = 50;
 let selectedCatalogPaths = new Set();
@@ -637,7 +1005,6 @@ let currentSort = localStorage.getItem('folio_sort') || 'name';
 let zoomSens = parseFloat(localStorage.getItem('folio_zoom_sens')) || 5;
 let currentTheme = localStorage.getItem('folio_theme') || 'dark';
 let cinematicEnabled = localStorage.getItem('folio_cinematic') !== 'false';
-let useCustomCursor = localStorage.getItem('folio_custom_cursor') !== 'false';
 let showRecentFolders = localStorage.getItem('folio_show_recents') !== 'false';
 let stripMetadataEnabled = localStorage.getItem('folio_strip_metadata') === 'true';
 let soundVolume = parseInt(localStorage.getItem('folio_sound_volume') ?? '40');
@@ -649,6 +1016,7 @@ let reverseGeocodeEnabled = localStorage.getItem('folio_reverse_geocode_enabled'
 let prefetchEnabled = localStorage.getItem('folio_prefetch_enabled') !== 'false';
 let vaultAutoLockMinutes = parseInt(localStorage.getItem('folio_vault_auto_lock_minutes') || '5', 10);
 let thumbnailCacheLimitGb = parseFloat(localStorage.getItem('folio_thumbnail_cache_limit_gb') || '2');
+let decodedCacheLimitGb = parseFloat(localStorage.getItem('folio_decoded_cache_limit_gb') || '4');
 let activeWatermarkOpacity = parseInt(localStorage.getItem('folio_watermark_opacity') || '70', 10);
 let activeWatermarkScale = parseInt(localStorage.getItem('folio_watermark_scale') || '100', 10);
 let activeWatermarkFont = parseInt(localStorage.getItem('folio_watermark_font') || '32', 10);
@@ -658,20 +1026,22 @@ let highContrastEnabled = localStorage.getItem('folio_high_contrast') === 'true'
 let reducedMotionEnabled = localStorage.getItem('folio_reduced_motion') === 'true';
 let performanceHudEnabled = localStorage.getItem('folio_performance_hud') === 'true';
 
-let trafficLightHover = false;
 let pendingRafUpdate = false;
 let editPanelOpen = false;
+let adjustPreviewActive = false;
+let editSessionPath = null;
+let gpsPopoverAnchor = null;
 let editDebounceTimer = null;
 let editPreviewImg = null;
 const editMap = new Map();
 const preloadedThumbs = new Map();
 const preloadCache = new Map();
+const videoPreloadCache = new Map();
 
 // Geocoding Cache & Service
 const geocodeCache = new Map();
-async function reverseGeocode(lat, lon) {
+async function fetchReverseGeocode(lat, lon) {
   if (lat === undefined || lat === null || lon === undefined || lon === null) return 'No coordinates';
-  if (!reverseGeocodeEnabled) return 'Address lookup disabled';
   const key = `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
   if (geocodeCache.has(key)) return geocodeCache.get(key);
   try {
@@ -706,7 +1076,18 @@ async function reverseGeocode(lat, lon) {
     return 'Address unavailable';
   }
 }
+
+async function reverseGeocode(lat, lon) {
+  if (!reverseGeocodeEnabled) return 'Address lookup disabled';
+  return fetchReverseGeocode(lat, lon);
+}
+
+async function reverseGeocodeForMap(lat, lon) {
+  return fetchReverseGeocode(lat, lon);
+}
+
 window.reverseGeocode = reverseGeocode;
+window.reverseGeocodeForMap = reverseGeocodeForMap;
 
 // Bind existing sessions properties to FolioState dynamically
 Object.defineProperties(FolioState, {
@@ -718,11 +1099,10 @@ Object.defineProperties(FolioState, {
   selectedCatalogPaths: { get() { return selectedCatalogPaths; }, set(val) { selectedCatalogPaths = val; } },
   gridThumbSize: { get() { return gridThumbSize; }, set(val) { gridThumbSize = val; } },
   activeTagFilter: { get() { return activeTagFilter; }, set(val) { activeTagFilter = val; } },
-  trafficLightHover: { get() { return trafficLightHover; }, set(val) { trafficLightHover = val; } },
   editPanelOpen: { get() { return editPanelOpen; }, set(val) { editPanelOpen = val; } }
 });
 
-const defaultKeybinds = { nextImage: 'ArrowRight', prevImage: 'ArrowLeft', resetZoom: '0', toggleMetadata: 'i', playVideo: ' ', modifierZoom: 'Shift', modifierPan: 'Shift', toggleZen: 'z', toggleSidebar: 'b', toggleFullscreen: 'f', editMode: 'e', addTag: 't', toggleCatalog: 'g' };
+const defaultKeybinds = { nextImage: 'ArrowRight', prevImage: 'ArrowLeft', resetZoom: '0', toggleMetadata: 'i', playVideo: ' ', modifierZoom: 'Shift', modifierPan: 'Shift', toggleZen: 'z', toggleSidebar: 'b', toggleFullscreen: 'f', editMode: 'e', addTag: 't', toggleCatalog: 'g', goHome: 'h' };
 let keybinds = { ...defaultKeybinds, ...JSON.parse(localStorage.getItem('folio_keybinds') || '{}') };
 
 /* ── Init ── */
@@ -732,7 +1112,7 @@ if (recentFoldersCheck) {
   recentFoldersCheck.addEventListener('change', (e) => {
     showRecentFolders = e.target.checked;
     localStorage.setItem('folio_show_recents', showRecentFolders);
-    renderRecentFolders();
+    renderHomeHub();
   });
 }
 if (stripMetadataCheck) {
@@ -766,19 +1146,39 @@ if (biometricVaultCheck) {
 }
 
 async function refreshVaultStatus() {
-  if (!vaultStatusVal) return;
   try {
     const status = await invoke('vault_status');
-    vaultStatusVal.textContent = `${status.unlocked ? 'Unlocked' : 'Locked'} • ${status.item_count} item${status.item_count === 1 ? '' : 's'}`;
+    const label = `${status.unlocked ? 'Unlocked' : 'Locked'} • ${status.item_count} item${status.item_count === 1 ? '' : 's'}`;
+    if (vaultStatusVal) vaultStatusVal.textContent = label;
+    if (vaultStatusBanner) {
+      vaultStatusBanner.className = 'vault-status-banner' + (status.unlocked ? ' is-unlocked' : ' is-locked');
+      vaultStatusBanner.innerHTML = `
+        <div class="vault-status-banner-icon">${status.unlocked ? '🔓' : '🔒'}</div>
+        <div class="vault-status-banner-text">
+          <strong>${status.unlocked ? 'Vault unlocked' : 'Vault locked'}</strong>
+          <span>${status.item_count} protected item${status.item_count === 1 ? '' : 's'} · Auto-lock after ${vaultAutoLockMinutes} min</span>
+        </div>`;
+    }
   } catch (e) {
-    vaultStatusVal.textContent = 'Vault unavailable';
+    if (vaultStatusVal) vaultStatusVal.textContent = 'Vault unavailable';
+    if (vaultStatusBanner) {
+      vaultStatusBanner.className = 'vault-status-banner is-error';
+      vaultStatusBanner.innerHTML = '<div class="vault-status-banner-text"><strong>Vault unavailable</strong><span>Secure storage could not be reached on this system.</span></div>';
+    }
   }
 }
 
 vaultAutoLockInput && (vaultAutoLockInput.value = vaultAutoLockMinutes);
-vaultAutoLockInput?.addEventListener('change', e => {
+invoke('vault_set_auto_lock', { minutes: vaultAutoLockMinutes }).catch(() => {});
+vaultAutoLockInput?.addEventListener('change', async e => {
   vaultAutoLockMinutes = Math.max(1, Math.min(120, parseInt(e.target.value || '5', 10)));
-  localStorage.setItem('folio_vault_auto_lock_minutes', vaultAutoLockMinutes);
+  localStorage.setItem('folio_vault_auto_lock_minutes', String(vaultAutoLockMinutes));
+  try {
+    await invoke('vault_set_auto_lock', { minutes: vaultAutoLockMinutes });
+    refreshVaultStatus();
+  } catch (err) {
+    showToast(`Auto-lock update failed: ${err}`);
+  }
 });
 vaultCreateBtn?.addEventListener('click', async () => {
   try {
@@ -798,6 +1198,56 @@ vaultLockBtn?.addEventListener('click', async () => {
   await invoke('vault_lock').catch(() => {});
   showToast('Vault locked');
   refreshVaultStatus();
+});
+$('vaultRepairBtn')?.addEventListener('click', async () => {
+  try {
+    const r = await invoke('vault_repair_catalog');
+    showToast(`Vault repaired: ${r.removed_rows} row(s), ${r.removed_files} orphan file(s)`);
+    refreshVaultStatus();
+  } catch (e) {
+    showToast(`Vault repair failed: ${e}`);
+  }
+});
+$('classifySuggestBtn')?.addEventListener('click', async () => {
+  const item = items[idx];
+  if (!item?.path || item.is_video) {
+    showToast('Classification works on still images');
+    return;
+  }
+  const host = $('classifyResults');
+  const btn = $('classifySuggestBtn');
+  if (!host) return;
+  btn.disabled = true;
+  host.style.display = 'flex';
+  host.textContent = 'Analyzing…';
+  try {
+    const rows = await invoke('classify_image_path', { path: item.path });
+    host.innerHTML = '';
+    if (!rows?.length) {
+      host.textContent = 'No suggestions (macOS Vision required)';
+      return;
+    }
+    rows.slice(0, 8).forEach((row) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'classify-chip';
+      chip.textContent = `${row.label} ${Math.round(row.confidence * 100)}%`;
+      chip.title = 'Add as tag';
+      chip.addEventListener('click', async () => {
+        try {
+          await invoke('add_tag_to_image', { path: item.path, tagName: row.label, tagColor: '#D4A72C' });
+          showToast(`Tagged: ${row.label}`);
+        } catch (err) {
+          showToast(String(err));
+        }
+      });
+      host.appendChild(chip);
+    });
+  } catch (e) {
+    host.textContent = String(e);
+  } finally {
+    btn.disabled = false;
+  }
 });
 window.addEventListener('blur', () => invoke('vault_lock').then(refreshVaultStatus).catch(() => {}));
 refreshVaultStatus();
@@ -910,8 +1360,19 @@ if (thumbCacheLimitInput) {
   thumbCacheLimitInput.value = thumbnailCacheLimitGb;
   thumbCacheLimitInput.addEventListener('change', async e => {
     thumbnailCacheLimitGb = Math.max(0.25, Math.min(100, parseFloat(e.target.value || '2')));
-    localStorage.setItem('folio_thumbnail_cache_limit_gb', thumbnailCacheLimitGb);
+    localStorage.setItem('folio_thumbnail_cache_limit_gb', String(thumbnailCacheLimitGb));
     await invoke('set_thumbnail_cache_limit', { limitGb: thumbnailCacheLimitGb }).catch(err => showToast(`Cache limit failed: ${err}`));
+  });
+}
+if (decodedCacheLimitInput) {
+  decodedCacheLimitInput.value = decodedCacheLimitGb;
+  invoke('set_decoded_cache_limit', { limitGb: decodedCacheLimitGb }).catch(() => {});
+  decodedCacheLimitInput.addEventListener('change', async e => {
+    decodedCacheLimitGb = Math.max(0.5, Math.min(100, parseFloat(e.target.value || '4')));
+    localStorage.setItem('folio_decoded_cache_limit_gb', String(decodedCacheLimitGb));
+    await invoke('set_decoded_cache_limit', { limitGb: decodedCacheLimitGb }).catch(err => showToast(`Decoded limit failed: ${err}`));
+    await invoke('prune_decoded_cache').catch(() => {});
+    loadStorageDiagnostics().catch(() => {});
   });
 }
 if (prefetchCheck) {
@@ -940,22 +1401,26 @@ function applyTheme(theme) {
   document.body.classList.toggle('light-theme', theme === 'light');
   const root = document.documentElement.style;
   if (theme === 'light') {
+    root.setProperty('--folio-surface', '#ffffff');
     root.setProperty('--bg-deep', '#f5f5f6');
-    root.setProperty('--bg-sidebar', 'rgba(250, 250, 250, 0.94)');
+    root.setProperty('--bg-sidebar', 'rgba(255, 255, 255, 0.96)');
     root.setProperty('--text-primary', '#1a1a1e');
     root.setProperty('--text-secondary', 'rgba(0, 0, 0, 0.55)');
-    root.setProperty('--text-tertiary', 'rgba(0, 0, 0, 0.35)');
-    root.setProperty('--border-subtle', 'rgba(0, 0, 0, 0.07)');
-    root.setProperty('--modal-bg', 'rgba(255, 255, 255, 0.9)');
+    root.setProperty('--text-tertiary', 'rgba(0, 0, 0, 0.38)');
+    root.setProperty('--border-subtle', 'rgba(0, 0, 0, 0.08)');
+    root.setProperty('--border-hover', 'rgba(0, 0, 0, 0.14)');
+    root.setProperty('--modal-bg', 'rgba(255, 255, 255, 0.96)');
     root.setProperty('--input-bg', 'rgba(0, 0, 0, 0.05)');
     root.setProperty('--overlay-bg', 'rgba(0, 0, 0, 0.2)');
   } else {
-    root.setProperty('--bg-deep', '#08080a');
-    root.setProperty('--bg-sidebar', 'rgba(12, 12, 14, 0.94)');
-    root.setProperty('--text-primary', '#f0f0f4');
-    root.setProperty('--text-secondary', 'rgba(255, 255, 255, 0.48)');
-    root.setProperty('--text-tertiary', 'rgba(255, 255, 255, 0.22)');
+    root.setProperty('--folio-surface', '#1b1b1f');
+    root.setProperty('--bg-deep', '#111113');
+    root.setProperty('--bg-sidebar', 'rgba(27, 27, 31, 0.96)');
+    root.setProperty('--text-primary', '#f5f5f2');
+    root.setProperty('--text-secondary', 'rgba(245, 245, 242, 0.55)');
+    root.setProperty('--text-tertiary', 'rgba(245, 245, 242, 0.32)');
     root.setProperty('--border-subtle', 'rgba(255, 255, 255, 0.06)');
+    root.setProperty('--border-hover', 'rgba(255, 255, 255, 0.12)');
     root.setProperty('--modal-bg', 'rgba(18, 18, 20, 0.88)');
     root.setProperty('--input-bg', 'rgba(255, 255, 255, 0.06)');
     root.setProperty('--overlay-bg', 'rgba(0, 0, 0, 0.45)');
@@ -1012,51 +1477,19 @@ initTooltips();
 
 function renderMediaError(layer, item, onRetry) {
   layer.innerHTML = '';
-  
-  const errCard = document.createElement('div');
-  errCard.className = 'glassmorphic-error-card';
-  errCard.style.cssText = `
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    padding: 32px;
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-    max-width: 400px;
-    text-align: center;
-    color: var(--text-primary);
-    margin: auto;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    animation: fadeIn var(--transition-dur-normal) var(--ease-spring);
-  `;
-  
-  const title = document.createElement('div');
-  title.textContent = 'Failed to Load Media';
-  title.style.cssText = 'font-weight: 600; font-size: 15px; margin-top: 8px;';
-  const name = document.createElement('div');
-  name.textContent = item.path.split('/').pop();
-  name.style.cssText = 'font-size: 12px; color: var(--text-secondary); line-height: 1.4; word-break: break-all; margin-top: 4px;';
-  const retryBtn = document.createElement('button');
-  retryBtn.className = 'catalog-btn retry-btn';
-  retryBtn.textContent = 'Retry Loading';
-  retryBtn.style.cssText = 'margin-top: 16px; border-color: rgba(255,75,75,0.25); background: rgba(255,75,75,0.05); color: #ff6b6b; cursor: pointer; outline: none;';
-  errCard.append(title, name, retryBtn);
-  
-  retryBtn.onclick = (e) => {
-    e.stopPropagation();
-    onRetry();
-  };
-  
-  layer.appendChild(errCard);
+  const ext = (item.path.split('.').pop() || '').toLowerCase();
+  const rawLike = ['cr2', 'cr3', 'nef', 'arw', 'dng', 'raf', 'orf', 'rw2', 'heic', 'heif', 'tif', 'tiff'].includes(ext);
+  const host = document.createElement('div');
+  host.className = 'folio-state-host folio-state-host--layer is-active';
+  renderEmptyState(host, {
+    preset: rawLike ? 'media-unsupported' : 'media-error',
+    message: rawLike
+      ? `${item.path.split(/[/\\]/).pop()} is decoding. Retry if it does not appear shortly.`
+      : `${item.path.split(/[/\\]/).pop()} could not be loaded.`,
+    actions: [{ label: 'Retry', primary: true, onClick: () => onRetry() }],
+  });
+  host.style.cssText = 'position:absolute;inset:0;z-index:20;';
+  layer.appendChild(host);
 }
 
 function makeEditable(element, fieldKey) {
@@ -1133,73 +1566,44 @@ function playUISound(name) {
   invoke('trigger_macos_sound', { name, volume }).catch(()=>{});
 }
 
-let activeToasts = [];
-function showToast(message) {
-  const container = $('toastContainer');
-  if (!container) return;
-  const toast = document.createElement('div');
-  toast.className = 'toast';
-  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  icon.setAttribute('width', '14');
-  icon.setAttribute('height', '14');
-  icon.setAttribute('viewBox', '0 0 24 24');
-  icon.setAttribute('fill', 'none');
-  icon.setAttribute('stroke', 'currentColor');
-  icon.setAttribute('stroke-width', '3');
-  icon.setAttribute('stroke-linecap', 'round');
-  icon.setAttribute('stroke-linejoin', 'round');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M22 11.08V12a10 10 0 1 1-5.93-9.14');
-  const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-  poly.setAttribute('points', '22 4 12 14.01 9 11.01');
-  icon.append(path, poly);
-  const label = document.createElement('span');
-  label.textContent = String(message);
-  toast.append(icon, label);
-  container.appendChild(toast);
-  activeToasts.push(toast);
-  
-  const type = message.toLowerCase().includes('fail') || message.toLowerCase().includes('error') ? 'error' : 'success';
-  playUISound(type);
+initToast({ playSound: (name) => playUISound(name) });
+initA11y();
 
-  const updateStack = () => {
-    activeToasts.forEach((t, i) => {
-      const offset = (activeToasts.length - 1 - i) * 44;
-      t.style.transform = `translateY(${-offset}px)`;
-    });
-  };
-  updateStack();
+const SETTINGS_PANE_TITLES = {
+  general: 'General', appearance: 'Appearance', catalog: 'Catalog', cache: 'Cache',
+  export: 'Export', shortcuts: 'Shortcuts', security: 'Security', advanced: 'Advanced',
+};
+let settingsReturnTo = 'home';
 
-  setTimeout(() => {
-    toast.classList.add('hiding');
-    setTimeout(() => {
-      activeToasts = activeToasts.filter(t => t !== toast);
-      toast.remove();
-      updateStack();
-    }, 300);
-  }, 3000);
+function openSettings() {
+  settingsReturnTo = items.length || openedLibraryPath ? 'shell' : 'home';
+  welcome?.classList.add('hidden');
+  if (appShell) appShell.style.display = 'none';
+  if (settingsPage) {
+    settingsPage.style.display = 'flex';
+    settingsPage.setAttribute('aria-hidden', 'false');
+  }
+  const activeTab = document.querySelector('.settings-nav-item.active')?.dataset?.tab || 'general';
+  if (activeTab === 'cache' || activeTab === 'advanced') loadStorageDiagnostics();
 }
 
-function openSettings() { $('settingsModal').style.display = 'flex'; }
-function closeSettings() { $('settingsModal').style.display = 'none'; }
-
-function updateCursorVisibility() {
-  const shouldShowNative = !useCustomCursor || trafficLightHover;
-  document.body.classList.toggle('force-native-cursor', shouldShowNative);
-  getCurrentWindow().setCursorVisible(shouldShowNative).catch(() => {});
-  if (customCursor) customCursor.style.opacity = shouldShowNative ? 0 : 1;
+function closeSettings() {
+  if (settingsPage) {
+    settingsPage.style.display = 'none';
+    settingsPage.setAttribute('aria-hidden', 'true');
+  }
+  if (settingsReturnTo === 'shell') {
+    setAppShellVisible(true);
+    updateWorkspaceLayout();
+  } else {
+    showHomeHub();
+  }
 }
 
-function setTrafficLightHover(active) {
-  if (trafficLightHover === active) return;
-  trafficLightHover = active;
-  updateCursorVisibility();
-}
-updateCursorVisibility();
+getCurrentWindow().setCursorVisible(true).catch(() => {});
 
 async function syncFullscreenState() {
   try { isFullscreen = await getCurrentWindow().isFullscreen(); } catch { isFullscreen = false; }
-  if (isFullscreen && trafficLightHover) { trafficLightHover = false; updateCursorVisibility(); }
   if (fullscreenBtn) {
     fullscreenBtn.classList.toggle('active', isFullscreen);
     fullscreenBtn.textContent = isFullscreen ? 'EXIT' : 'FULL';
@@ -1230,26 +1634,31 @@ function scheduleUpdate() {
 
 function setZoom(level, cx, cy, opts = {}) {
   const oldZ = zoom;
+  const snapToFit = opts.snapToFit !== false;
   zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, level));
-  
+
   if ((zoom === 1 && oldZ !== 1) || (Math.floor(oldZ) !== Math.floor(zoom))) {
     try { playUISound('tick'); } catch (e) {}
   }
 
   const img = getActiveImage();
   if (img) {
-    if (zoom <= 1.01) {
-      const snapped = (zoom !== oldZ);
-      zoom = 1; panX = 0; panY = 0;
-      img.classList.remove('zoomed'); img.style.transform = '';
+    if (zoom <= 1) {
+      zoom = 1;
+      panX = 0;
+      panY = 0;
+      img.classList.remove('zoomed');
+      img.style.transform = '';
       if (editPreviewImg) editPreviewImg.style.transform = '';
-      if (snapped && !opts.skipBounce) {
+      const crossedFit = oldZ > 1.02;
+      if (snapToFit && crossedFit && !opts.skipBounce) {
         img.classList.add('zoom-snap-bounce');
         setTimeout(() => img.classList.remove('zoom-snap-bounce'), 250);
+        invoke('macos_haptic_tick', { style: 'snap' }).catch(() => {});
       }
     } else {
       img.classList.add('zoomed');
-      if (cx !== undefined && cy !== undefined) {
+      if (cx !== undefined && cy !== undefined && oldZ > 0) {
         const ratio = zoom / oldZ;
         panX = cx - (cx - panX) * ratio;
         panY = cy - (cy - panY) * ratio;
@@ -1262,59 +1671,227 @@ function setZoom(level, cx, cy, opts = {}) {
 }
 
 function resetZoom() { setZoom(1, 0, 0, { smooth: false }); }
+
+const PICKS_KEY = 'folio_picks';
+function getPicks() {
+  try { return new Set(JSON.parse(localStorage.getItem(PICKS_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+function savePicks(set) {
+  localStorage.setItem(PICKS_KEY, JSON.stringify([...set]));
+}
+function isPicked(path) { return getPicks().has(path); }
+function togglePick(path) {
+  const picks = getPicks();
+  if (picks.has(path)) picks.delete(path);
+  else picks.add(path);
+  savePicks(picks);
+  return picks.has(path);
+}
+
+function createHomeFolderRow(path) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'home-list-item';
+  const meta = document.createElement('div');
+  meta.className = 'home-item-meta';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'home-item-name';
+  nameEl.textContent = folderDisplayName(path);
+  const pathEl = document.createElement('span');
+  pathEl.className = 'home-item-path';
+  pathEl.textContent = formatHomePath(path);
+  meta.append(nameEl, pathEl);
+  const pinBtn = document.createElement('button');
+  pinBtn.type = 'button';
+  pinBtn.className = 'home-pin-btn' + (isPinned(path) ? ' pinned' : '');
+  pinBtn.innerHTML = '★';
+  pinBtn.title = isPinned(path) ? 'Unpin' : 'Pin location';
+  pinBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePinnedFolder(path);
+    renderHomeHub();
+  });
+  row.append(meta, pinBtn);
+  row.addEventListener('click', async () => {
+    try {
+      const p = await invoke('open_specific_folder', { path });
+      await loadFolderData(p);
+    } catch (e) {
+      showToast('Failed to open folder');
+    }
+  });
+  return row;
+}
+
+async function renderPinnedFoldersList() {
+  const container = $('pinnedFolders');
+  if (!container) return;
+  const layout = getHomeLayout();
+  const section = $('homePinnedSection');
+  if (section) section.style.display = layout.showPinned ? '' : 'none';
+  container.replaceChildren();
+  const pinned = getPinnedFolders();
+  if (!pinned.length) {
+    const empty = document.createElement('p');
+    empty.className = 'onboarding-hint';
+    empty.style.margin = '0';
+    empty.textContent = 'Pin folders from recents with ★';
+    container.appendChild(empty);
+    return;
+  }
+  pinned.forEach((path) => container.appendChild(createHomeFolderRow(path)));
+}
+
+function renderHomeCustomizeChips() {
+  const wrap = $('homeCustomizeChips');
+  if (!wrap) return;
+  const layout = getHomeLayout();
+  const section = $('homeCustomizeSection');
+  if (section) section.style.display = '';
+  const chips = [
+    { key: 'showLibrary', label: 'Library' },
+    { key: 'showPinned', label: 'Pinned' },
+    { key: 'showRecents', label: 'Recent' },
+    { key: 'showShortcuts', label: 'Shortcuts' },
+  ];
+  wrap.replaceChildren();
+  chips.forEach(({ key, label }) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'home-chip' + (layout[key] ? ' active' : '');
+    chip.textContent = label;
+    chip.addEventListener('click', () => {
+      saveHomeLayout({ [key]: !layout[key] });
+      renderHomeHub();
+    });
+    wrap.appendChild(chip);
+  });
+}
+
+async function clearAllRecents() {
+  try {
+    await invoke('clear_recent_folders');
+    await renderHomeHub();
+    showToast('Recent folders cleared');
+  } catch (e) {
+    showToast(`Could not clear recents: ${e}`);
+  }
+}
+
+$('clearRecentsHomeBtn')?.addEventListener('click', clearAllRecents);
+$('clearRecentsSettingsBtn')?.addEventListener('click', clearAllRecents);
+
+async function renderHomeHub() {
+  const scrollEl = document.querySelector('.home-side-scroll');
+  const savedScrollTop = scrollEl?.scrollTop ?? 0;
+  const layout = getHomeLayout();
+  const lib = $('homeLibrarySection');
+  const pin = $('homePinnedSection');
+  const rec = $('homeRecentsSection');
+  const shortcuts = document.querySelector('.home-shortcuts');
+  if (lib) lib.style.display = layout.showLibrary ? '' : 'none';
+  if (pin) pin.style.display = layout.showPinned ? '' : 'none';
+  if (rec) rec.style.display = layout.showRecents && showRecentFolders ? '' : 'none';
+  if (shortcuts) shortcuts.style.display = layout.showShortcuts ? 'flex' : 'none';
+  const catalogBtn = $('homeCatalogBtn');
+  if (catalogBtn) {
+    catalogBtn.style.display = openedLibraryPath ? '' : 'none';
+    catalogBtn.onclick = () => {
+      if (items.length) toggleCatalogView(true);
+    };
+  }
+  await renderPinnedFoldersList();
+  await renderRecentFolders();
+  renderHomeCustomizeChips();
+  if (scrollEl) scrollEl.scrollTop = savedScrollTop;
+}
+
 async function renderRecentFolders() {
   const container = $('recentFolders');
   if (!container) return;
+  const layout = getHomeLayout();
+  const section = $('homeRecentsSection');
+  if (section) section.style.display = layout.showRecents && showRecentFolders ? '' : 'none';
   if (!showRecentFolders) {
     container.innerHTML = '';
     return;
   }
-
   try {
     const fullList = await invoke('get_recent_folders');
-    if (!fullList || fullList.length === 0) {
-      container.innerHTML = '';
+    container.replaceChildren();
+    if (!fullList?.length) {
+      const empty = document.createElement('p');
+      empty.className = 'onboarding-hint';
+      empty.style.margin = '0';
+      empty.textContent = 'No recent folders yet';
+      container.appendChild(empty);
       return;
     }
-    const list = fullList.slice(0, 4);
-
-    container.replaceChildren();
-    const title = document.createElement('div');
-    title.className = 'recents-title';
-    title.textContent = 'Recent Folders';
-    container.appendChild(title);
-    list.forEach(path => {
-      const card = document.createElement('div');
-      card.className = 'recent-card';
-      const name = path.split('/').pop() || path;
-      const nameEl = document.createElement('span');
-      nameEl.className = 'recent-name';
-      nameEl.textContent = name;
-      const pathEl = document.createElement('span');
-      pathEl.className = 'recent-path';
-      pathEl.textContent = path.replace(/^\/Users\/[^\/]+/, '~');
-      const finder = document.createElement('button');
-      finder.className = 'catalog-btn';
-      finder.style.cssText = 'margin-left:auto;padding:3px 6px;font-size:10px;';
-      finder.textContent = 'Finder';
-      finder.addEventListener('click', e => {
-        e.stopPropagation();
-        openPathInFinder(path, false);
-      });
-      card.append(nameEl, pathEl, finder);
-      card.addEventListener('click', async () => {
-        try {
-          const p = await invoke('open_specific_folder', { path });
-          loadFolderData(p);
-        } catch (e) {
-          showToast('Failed to open recent folder');
-          console.error(e);
-        }
-      });
-      container.appendChild(card);
-    });
+    fullList.slice(0, 8).forEach((path) => container.appendChild(createHomeFolderRow(path)));
   } catch (e) {
     console.error('[Folio] Failed to fetch recents:', e);
+  }
+}
+
+function updateViewerToolbar() {
+  const starsEl = $('viewerStars');
+  const favBtn = $('viewerFavoriteBtn');
+  const pickBtn = $('viewerPickBtn');
+  const item = items[idx];
+  if (!starsEl || !item || item.is_video) {
+    if (starsEl) starsEl.innerHTML = '';
+    return;
+  }
+  const attr = mediaAttributesCache.get(item.path) || {};
+  const rating = attr.rating || 0;
+  starsEl.replaceChildren();
+  for (let s = 1; s <= 5; s++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'viewer-star' + (s <= rating ? ' filled' : '');
+    btn.textContent = '★';
+    btn.setAttribute('aria-label', `Rate ${s} stars`);
+    btn.addEventListener('click', async () => {
+      const next = s === rating ? 0 : s;
+      try {
+        await invoke('set_media_rating', { paths: [item.path], rating: next });
+        const a = mediaAttributesCache.get(item.path) || { path: item.path };
+        a.rating = next;
+        mediaAttributesCache.set(item.path, a);
+        updateViewerToolbar();
+        buildFilmstrip();
+        if (catalogModeActive) buildCatalogContent();
+      } catch (err) {
+        showToast(`Rating failed: ${err}`);
+      }
+    });
+    starsEl.appendChild(btn);
+  }
+  if (favBtn) {
+    favBtn.classList.toggle('active', !!attr.favorite);
+    favBtn.onclick = async () => {
+      const next = !attr.favorite;
+      try {
+        await invoke('set_media_favorite', { paths: [item.path], favorite: next });
+        const a = mediaAttributesCache.get(item.path) || { path: item.path };
+        a.favorite = next;
+        mediaAttributesCache.set(item.path, a);
+        updateViewerToolbar();
+        buildFilmstrip();
+        if (catalogModeActive) buildCatalogContent();
+        if (next) playFavoriteBurst(favBtn);
+      } catch (err) {
+        showToast(`Favorite failed: ${err}`);
+      }
+    };
+  }
+  if (pickBtn) {
+    pickBtn.classList.toggle('active', isPicked(item.path));
+    pickBtn.onclick = () => {
+      togglePick(item.path);
+      updateViewerToolbar();
+    };
   }
 }
 
@@ -1354,42 +1931,87 @@ function processLoadedItems(rawItems) {
   return rawItems.filter(it => !pairedVideoPaths.has(it.path.toLowerCase()));
 }
 
-async function loadFolderData(p) {
-  if (localStorage.getItem('folio_biometric_lock') === 'true') {
-    showToast("Authenticating Secure Vault...");
-    try {
+async function openMediaFromPath(filePath) {
+  try {
+    const result = await invoke('open_media_at_path', { filePath });
+    await loadFolderData(result.folder, result.file || null);
+    return result;
+  } catch (err) {
+    showToast(`Could not open file: ${err}`);
+    return null;
+  }
+}
+
+async function loadFolderData(p, selectPath = null) {
+  openedLibraryPath = p;
+  clearEmptyState(catalogStateHost);
+  clearEmptyState(viewerStateHost);
+  renderEmptyState(catalogStateHost, { preset: 'folder-loading' });
+  renderEmptyState(viewerStateHost, { preset: 'folder-loading' });
+
+  try {
+    if (localStorage.getItem('folio_biometric_lock') === 'true') {
+      showToast('Authenticating Secure Vault…');
       const authenticated = await invoke('authenticate_vault');
       if (!authenticated) {
-        showToast("Secure Vault access denied!");
+        showToast('Secure Vault access denied');
+        renderEmptyState(viewerStateHost, {
+          preset: 'vault-locked',
+          message: 'Vault authentication was cancelled or failed. Open Settings → Security to try again.',
+        });
+        clearEmptyState(catalogStateHost);
         return;
       }
-      showToast("Secure Vault unlocked!");
-    } catch (e) {
-      showToast(`Authentication failed: ${e}`);
+      showToast('Secure Vault unlocked');
+    }
+
+    items = processLoadedItems(await invoke('get_folder_items'));
+    idx = 0;
+    sortItems();
+    if (selectPath) {
+      const normalized = selectPath.toLowerCase();
+      const found = items.findIndex((it) => it.path.toLowerCase() === normalized);
+      if (found >= 0) idx = found;
+    }
+    renderBreadcrumbs(p);
+    activeTagFilter = null;
+    activeColorFilter = null;
+    folderDominantColorsCache = {};
+
+    if (!items.length) {
+      const emptyOpts = {
+        preset: 'folder-empty',
+        actions: [{ label: 'Choose another folder', primary: true, onClick: () => openFolder() }],
+      };
+      renderEmptyState(catalogStateHost, emptyOpts);
+      renderEmptyState(viewerStateHost, emptyOpts);
+      updateWorkspaceLayout();
       return;
     }
-  }
 
-  items = processLoadedItems(await invoke('get_folder_items'));
-  idx = 0; sortItems();
-  welcome.classList.add('hidden');
-  renderBreadcrumbs(p);
-  playUISound('load');
-  activeTagFilter = null;
-  activeColorFilter = null;
-  folderDominantColorsCache = {};
-  await renderTagFilters();
-  filmstrip.scrollTop = 0;
-  if (catalogModeActive) {
-    catalogGrid.style.display = 'grid';
-    sidebar.style.display = 'none';
-    viewer.style.display = 'none';
-    buildCatalogContent();
-  } else {
-    catalogGrid.style.display = 'none';
-    sidebar.style.display = 'flex';
-    viewer.style.display = 'flex';
-    show(idx);
+    clearEmptyState(catalogStateHost);
+    clearEmptyState(viewerStateHost);
+    editSessionPath = null;
+    filmstrip.scrollTop = 0;
+    updateWorkspaceLayout();
+    playUISound('load');
+    if (catalogModeActive) {
+      buildCatalogContent();
+    } else {
+      show(idx);
+    }
+    buildFilmstrip();
+    Promise.all([renderTagFilters(), loadMediaAttributes()]).catch((e) => console.error(e));
+  } catch (e) {
+    console.error(e);
+    const msg = String(e);
+    renderEmptyState(catalogStateHost, { preset: 'folder-error', message: msg });
+    renderEmptyState(viewerStateHost, {
+      preset: 'folder-error',
+      message: msg,
+      actions: [{ label: 'Try again', primary: true, onClick: () => loadFolderData(p, selectPath) }],
+    });
+    showToast(`Could not open folder: ${msg}`);
   }
 }
 
@@ -1435,9 +2057,12 @@ async function openFolder() {
         const p = await invoke('open_folder_picker');
         if (!p) return;
         await invoke('add_recent_folder', { path: p });
-        renderRecentFolders();
-        loadFolderData(p);
-    } catch (e) { console.error(e); }
+        renderHomeHub();
+        await loadFolderData(p);
+    } catch (e) {
+        console.error(e);
+        showToast(`Could not open folder: ${e}`);
+    }
 }
 
 function currentFolderPath() {
@@ -1486,6 +2111,7 @@ function preloadImage(item) {
   const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext);
 
   const img = new Image();
+  img.crossOrigin = 'anonymous';
   preloadCache.set(item.path, img);
 
   if (isNative) {
@@ -1495,11 +2121,33 @@ function preloadImage(item) {
       .then(p => {
         img.src = `folio://localhost/${encodeURIComponent(p)}`;
       })
-      .catch(e => {
+      .catch(() => {
         preloadCache.delete(item.path);
-        console.error('RAW preload failed:', e);
       });
   }
+}
+
+function preloadVideo(item) {
+  if (!item?.is_video || videoPreloadCache.has(item.path)) return;
+  const v = document.createElement('video');
+  v.muted = true;
+  v.preload = 'auto';
+  v.playsInline = true;
+  v.setAttribute('playsinline', '');
+  v.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none;left:-9999px';
+  v.src = `folio://localhost/${encodeURIComponent(item.path)}`;
+  document.body.appendChild(v);
+  videoPreloadCache.set(item.path, v);
+}
+
+function evictVideoPreload(path) {
+  const v = videoPreloadCache.get(path);
+  if (!v) return;
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+  v.remove();
+  videoPreloadCache.delete(path);
 }
 
 function triggerPreload(currentIdx) {
@@ -1508,58 +2156,70 @@ function triggerPreload(currentIdx) {
   const now = performance.now();
   let direction = 1;
   let speed = 0;
-  
+
   if (window.lastPreloadTime > 0) {
     const dt = now - window.lastPreloadTime;
     let diff = currentIdx - window.lastPreloadIdx;
-    
+
     if (Math.abs(diff) > items.length / 2) {
       diff = diff > 0 ? diff - items.length : diff + items.length;
     }
-    
+
     if (dt > 0 && diff !== 0) {
       direction = diff > 0 ? 1 : -1;
       speed = Math.abs(diff) / dt;
     }
   }
-  
+
   window.lastPreloadIdx = currentIdx;
   window.lastPreloadTime = now;
 
   const keepSet = new Set();
   const offsets = [];
+  const fullDecodePaths = [];
 
   const isFast = speed > 0.003;
   if (isFast) {
-    for (let o = 1; o <= 3; o++) {
-      offsets.push(o * direction);
-    }
+    for (let o = 1; o <= 3; o++) offsets.push(o * direction);
   } else {
     offsets.push(-2, -1, 1, 2);
   }
 
   const currentItem = items[currentIdx];
-  if (currentItem) {
-    keepSet.add(currentItem.path);
-  }
+  if (currentItem) keepSet.add(currentItem.path);
 
   for (const offset of offsets) {
     const targetIdx = (currentIdx + offset + items.length) % items.length;
     const item = items[targetIdx];
-    if (item && !item.is_video) {
-      keepSet.add(item.path);
+    if (!item) continue;
+    keepSet.add(item.path);
+    if (item.is_video) {
+      preloadVideo(item);
+    } else {
       preloadImage(item);
+      const ext = (item.path.split('.').pop() || '').toLowerCase();
+      const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext);
+      if (Math.abs(offset) === 1 && !isNative) {
+        fullDecodePaths.push(item.path);
+      }
     }
   }
+
   if (prefetchEnabled) {
     const paths = Array.from(keepSet).filter(Boolean);
-    invoke('prefetch_media', { paths, maxSide: 320 }).catch(() => {});
+    if (paths.length) {
+      invoke('prefetch_media', { paths, maxSide: 640 }).catch(() => {});
+    }
+    if (fullDecodePaths.length) {
+      invoke('prefetch_decoded_media', { paths: fullDecodePaths }).catch(() => {});
+    }
   }
 
   for (const path of preloadCache.keys()) {
-    if (!keepSet.has(path)) {
-      preloadCache.delete(path);
-    }
+    if (!keepSet.has(path)) preloadCache.delete(path);
+  }
+  for (const path of videoPreloadCache.keys()) {
+    if (!keepSet.has(path)) evictVideoPreload(path);
   }
 }
 
@@ -1568,7 +2228,13 @@ function show(i, dir = null) {
   idx = i; zoom = 1; panX = 0; panY = 0;
   zoomSlider.value = 100; zoomLabel.textContent = '100%';
   
-  const item = items[i], src = `folio://localhost/${encodeURIComponent(item.path)}`, outgoing = media.querySelector('.media-layer.media-active');
+  const item = items[i];
+  if (!item?.is_video) detachVideoToolbar();
+  if (editSessionPath && editSessionPath !== item.path) {
+    editSessionPath = null;
+    removeEditPreview();
+  }
+  const src = `folio://localhost/${encodeURIComponent(item.path)}`, outgoing = media.querySelector('.media-layer.media-active');
   if (outgoing) {
     if (cinematicEnabled && direction !== 0) {
       applyPhysicalExit(outgoing, direction);
@@ -1598,7 +2264,13 @@ function show(i, dir = null) {
     viewer.classList.remove('loading');
     const v = document.createElement('video');
     v.className = 'media-content';
-    v.autoplay = true; v.loop = true; v.playsInline = true; v.src = src;
+    v.autoplay = true; v.loop = true; v.playsInline = true;
+    const warmed = videoPreloadCache.get(item.path);
+    if (warmed && warmed.readyState >= 2) {
+      v.src = warmed.currentSrc || warmed.src;
+    } else {
+      v.src = src;
+    }
 
     v.onerror = () => {
       viewer.classList.remove('loading');
@@ -1610,227 +2282,7 @@ function show(i, dir = null) {
 
     v.onloadeddata = () => {
       v.classList.add('loaded');
-      const ctrl = document.createElement('div');
-      ctrl.className = 'video-controls';
-      ctrl.innerHTML = `
-        <button class="v-play-btn" aria-label="Play/Pause">
-          <svg class="v-icon-play" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none;"><polygon points="6,3 20,12 6,21"/></svg>
-          <svg class="v-icon-pause" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-        </button>
-        <input type="range" class="v-progress" value="0" min="0" max="100" step="0.1">
-        <span class="v-time">0:00 / 0:00</span>
-        <div class="v-volume-container">
-          <button class="v-volume-btn" aria-label="Mute/Unmute">
-            <svg class="v-icon-volume-high" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-            <svg class="v-icon-volume-muted" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
-          </button>
-          <input type="range" class="v-volume-slider" min="0" max="100" value="100">
-        </div>
-        <button class="v-fullscreen-btn" aria-label="Fullscreen">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-        </button>
-      `;
-
-      const playBtn = ctrl.querySelector('.v-play-btn');
-      const progress = ctrl.querySelector('.v-progress');
-      const time = ctrl.querySelector('.v-time');
-      const volBtn = ctrl.querySelector('.v-volume-btn');
-      const volSlider = ctrl.querySelector('.v-volume-slider');
-      const fsBtn = ctrl.querySelector('.v-fullscreen-btn');
-
-      const iconPlay = playBtn.querySelector('.v-icon-play');
-      const iconPause = playBtn.querySelector('.v-icon-pause');
-      const iconVolHigh = volBtn.querySelector('.v-icon-volume-high');
-      const iconVolMuted = volBtn.querySelector('.v-icon-volume-muted');
-
-      // State machine for seek scrubbing
-      let isScrubbing = false;
-      let wasPlayingBeforeScrub = false;
-
-      const updatePlayButtonUI = () => {
-        if (v.paused) {
-          iconPlay.style.display = 'block';
-          iconPause.style.display = 'none';
-        } else {
-          iconPlay.style.display = 'none';
-          iconPause.style.display = 'block';
-        }
-      };
-
-      playBtn.onclick = () => {
-        if (v.paused) {
-          v.play().catch(e => console.error(e));
-        } else {
-          v.pause();
-        }
-        updatePlayButtonUI();
-      };
-
-      v.onplay = updatePlayButtonUI;
-      v.onpause = updatePlayButtonUI;
-
-      const updateTimeText = () => {
-        const curTime = v.currentTime || 0;
-        const durTime = v.duration || 0;
-        const curMins = Math.floor(curTime / 60), curSecs = Math.floor(curTime % 60);
-        const durMins = Math.floor(durTime / 60), durSecs = Math.floor(durTime % 60);
-        time.textContent = `${curMins}:${curSecs.toString().padStart(2, '0')} / ${durMins}:${durSecs.toString().padStart(2, '0')}`;
-      };
-
-      v.onloadedmetadata = updateTimeText;
-
-      v.ontimeupdate = () => {
-        if (!isScrubbing) {
-          const p = v.duration ? (v.currentTime / v.duration) * 100 : 0;
-          progress.value = p;
-          updateTimeText();
-        }
-      };
-
-      // Scrubbing event handlers
-      const endScrub = (e) => {
-        if (isScrubbing) {
-          isScrubbing = false;
-          ctrl.classList.remove('scrubbing-active');
-          FolioState.isScrubbingActive = false;
-          if (v.duration) {
-            v.currentTime = (progress.value / 100) * v.duration;
-          }
-          if (wasPlayingBeforeScrub) {
-            v.play().catch(e => console.error(e));
-          }
-        }
-        window.removeEventListener('pointerup', endScrub);
-        window.removeEventListener('pointercancel', endScrub);
-        window.removeEventListener('mouseup', endScrub);
-        window.removeEventListener('blur', endScrub);
-      };
-
-      progress.addEventListener('pointerdown', (e) => {
-        isScrubbing = true;
-        wasPlayingBeforeScrub = !v.paused;
-        v.pause();
-        ctrl.classList.add('scrubbing-active');
-        FolioState.isScrubbingActive = true;
-
-        window.addEventListener('pointerup', endScrub);
-        window.addEventListener('pointercancel', endScrub);
-        window.addEventListener('mouseup', endScrub);
-        window.addEventListener('blur', endScrub);
-      });
-
-      progress.addEventListener('input', () => {
-        if (v.duration) {
-          const seekTime = (progress.value / 100) * v.duration;
-          v.currentTime = seekTime;
-          // Render immediate scrubbing time frame feedback
-          const curMins = Math.floor(seekTime / 60), curSecs = Math.floor(seekTime % 60);
-          const durMins = Math.floor(v.duration / 60), durSecs = Math.floor(v.duration % 60);
-          time.textContent = `${curMins}:${curSecs.toString().padStart(2, '0')} / ${durMins}:${durSecs.toString().padStart(2, '0')}`;
-        }
-      });
-
-      // Volume slider slide-out handler
-      let savedVolume = localStorage.getItem('folio_video_volume');
-      let savedMuted = localStorage.getItem('folio_video_muted');
-
-      if (savedVolume !== null) {
-        v.volume = parseFloat(savedVolume);
-      } else {
-        v.volume = 0.8;
-      }
-
-      if (savedMuted !== null) {
-        v.muted = savedMuted === 'true';
-      } else {
-        v.muted = false;
-      }
-
-      let lastVolume = v.volume > 0 ? v.volume : 0.8;
-
-      const updateVolumeUI = () => {
-        volSlider.value = v.muted ? 0 : v.volume * 100;
-        if (v.muted || v.volume === 0) {
-          iconVolHigh.style.display = 'none';
-          iconVolMuted.style.display = 'block';
-        } else {
-          iconVolHigh.style.display = 'block';
-          iconVolMuted.style.display = 'none';
-        }
-      };
-
-      const endVolDrag = (e) => {
-        ctrl.classList.remove('volume-active');
-        FolioState.isVolumeActive = false;
-
-        window.removeEventListener('pointerup', endVolDrag);
-        window.removeEventListener('pointercancel', endVolDrag);
-        window.removeEventListener('mouseup', endVolDrag);
-        window.removeEventListener('blur', endVolDrag);
-      };
-
-      volSlider.addEventListener('pointerdown', (e) => {
-        ctrl.classList.add('volume-active');
-        FolioState.isVolumeActive = true;
-
-        window.addEventListener('pointerup', endVolDrag);
-        window.addEventListener('pointercancel', endVolDrag);
-        window.addEventListener('mouseup', endVolDrag);
-        window.addEventListener('blur', endVolDrag);
-      });
-
-      volSlider.addEventListener('input', () => {
-        v.volume = volSlider.value / 100;
-        if (v.volume > 0) {
-          v.muted = false;
-        }
-        saveVideoSettings(v.volume, v.muted);
-        updateVolumeUI();
-      });
-
-      volBtn.onclick = () => {
-        if (v.muted) {
-          v.muted = false;
-          v.volume = lastVolume > 0 ? lastVolume : 0.8;
-        } else {
-          lastVolume = v.volume > 0 ? v.volume : lastVolume;
-          v.muted = true;
-        }
-        saveVideoSettings(v.volume, v.muted);
-        updateVolumeUI();
-      };
-
-      v.onvolumechange = () => {
-        if (!v.muted && v.volume > 0) {
-          lastVolume = v.volume;
-        }
-        saveVideoSettings(v.volume, v.muted);
-        updateVolumeUI();
-      };
-      updateVolumeUI(); // init volume UI state
-
-      // Fullscreen compatibility handling (WebKit & Native container toggling)
-      fsBtn.onclick = () => {
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(err => console.error(err));
-        } else {
-          if (layer.requestFullscreen) {
-            layer.requestFullscreen().catch(err => {
-              if (v.requestFullscreen) {
-                v.requestFullscreen().catch(e => console.error(e));
-              } else if (v.webkitEnterFullscreen) {
-                v.webkitEnterFullscreen();
-              }
-            });
-          } else if (v.webkitEnterFullscreen) {
-            v.webkitEnterFullscreen();
-          }
-        }
-      };
-
-      layer.appendChild(ctrl);
-      
-      // Defer adaptive glow off the critical entry transition frame
+      bindVideoToolbar(v, layer);
       setTimeout(() => {
         requestAnimationFrame(() => {
           if (items[idx]?.path !== item.path) return;
@@ -1864,18 +2316,21 @@ function show(i, dir = null) {
             } catch (e) {
                 console.error("Adaptive glow error:", e);
             }
-            if (editPanelOpen) invoke('prepare_edit_preview', { path: item.path }).then(() => loadEditForCurrent()).catch(e => console.error(e));
-            if (overlayVisible) {
-                try {
-                    drawHistogram(img);
-                } catch (e) {
-                    console.error("Histogram error:", e);
-                }
-                try {
-                    drawDominantColors(item);
-                } catch (e) {
-                    console.error("Dominant colors error:", e);
-                }
+            if (isEditPreviewEnabled()) {
+              invoke('prepare_edit_preview', { path: item.path }).then(() => {
+                editSessionPath = item.path;
+                loadEditForCurrent();
+              }).catch(e => console.error(e));
+            }
+            try {
+              drawHistogram(img);
+            } catch (e) {
+              console.error('Histogram error:', e);
+            }
+            try {
+              drawDominantColors(item);
+            } catch (e) {
+              console.error('Dominant colors error:', e);
             }
           });
         }, 50);
@@ -1890,7 +2345,8 @@ function show(i, dir = null) {
             if (isNative) {
                 img.src = src + '?retry=' + Date.now();
             } else {
-                invoke('get_full_image', { path: item.path })
+                invoke('clear_decode_failures', { path: item.path }).catch(() => {});
+                invoke('get_full_image', { path: item.path, force: true })
                     .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}?retry=${Date.now()}`; })
                     .catch(() => { img.src = src + '?retry=' + Date.now(); });
             }
@@ -1935,13 +2391,29 @@ function show(i, dir = null) {
       `;
       layer.appendChild(badge);
 
+      let liveHoldTimer = null;
+      const startLiveHold = () => {
+        cancelLiveHold();
+        liveHoldTimer = window.setTimeout(() => {
+          invoke('play_live_photo_native', { videoPath: item.livePhotoVideoPath }).catch((e) => {
+            console.error('Live Photo native playback:', e);
+          });
+        }, 450);
+      };
+      const cancelLiveHold = () => {
+        if (liveHoldTimer) {
+          window.clearTimeout(liveHoldTimer);
+          liveHoldTimer = null;
+        }
+      };
+      layer.addEventListener('pointerdown', startLiveHold);
+      layer.addEventListener('pointerup', cancelLiveHold);
+      layer.addEventListener('pointerleave', cancelLiveHold);
       layer.addEventListener('mouseenter', () => {
-        v.play().then(() => {
-          v.style.opacity = '1';
-        }).catch(err => console.error("Live Photo playback error:", err));
+        v.play().then(() => { v.style.opacity = '1'; }).catch(() => {});
       });
-
       layer.addEventListener('mouseleave', () => {
+        cancelLiveHold();
         v.style.opacity = '0';
         setTimeout(() => {
           if (v.style.opacity === '0') {
@@ -1957,7 +2429,8 @@ function show(i, dir = null) {
 
   // Update UI Chrome
   counter.textContent = `${i + 1} of ${items.length}`;
-  fname.textContent = item.path.split('/').pop();
+  fname.textContent = truncateDisplayName(basename(item.path), 64);
+  fname.title = basename(item.path);
   dims.textContent = `${item.width} × ${item.height}`;
   badge.style.display = 'inline-block';
   badge.textContent = (item.path.split('.').pop() || '').toUpperCase();
@@ -1976,28 +2449,39 @@ function show(i, dir = null) {
       const latRef = lat >= 0 ? 'N' : 'S';
       const lonRef = lon >= 0 ? 'E' : 'W';
       gpsChip.textContent = `${Math.abs(lat).toFixed(4)}° ${latRef}, ${Math.abs(lon).toFixed(4)}° ${lonRef}`;
-      gpsChip.onclick = () => {
-        showMapPopup({
-          lat: lat,
-          lon: lon,
+      gpsChip.onclick = (e) => {
+        e.stopPropagation();
+        toggleGpsPopover(gpsChip, [{
+          lat,
+          lon,
           path: item.path,
-          name: item.path.split('/').pop()
-        });
+          name: item.path.split('/').pop(),
+        }]);
       };
       if (edAddress) {
+        edAddress.className = 'gps-address';
         if (reverseGeocodeEnabled) {
-          edAddress.textContent = 'Loading address...';
+          edAddress.classList.add('is-loading');
+          edAddress.textContent = 'Looking up address…';
           reverseGeocode(lat, lon).then(addr => {
-            if (items[idx]?.path === item.path) {
-              edAddress.textContent = addr;
+            if (items[idx]?.path !== item.path) return;
+            edAddress.classList.remove('is-loading');
+            if (/unavailable|disabled|failed|not found/i.test(addr)) {
+              edAddress.classList.add('is-error');
+            } else {
+              edAddress.classList.remove('is-error');
             }
+            edAddress.textContent = addr;
           }).catch(() => {
             if (items[idx]?.path === item.path) {
-              edAddress.textContent = 'Address unavailable';
+              edAddress.classList.remove('is-loading');
+              edAddress.classList.add('is-error');
+              edAddress.textContent = 'Address unavailable — check your connection';
             }
           });
         } else {
-          edAddress.textContent = 'Enable address lookup in Settings to resolve this location.';
+          edAddress.classList.add('is-muted');
+          edAddress.textContent = 'Enable address lookup in Settings → Advanced';
         }
       }
     } else {
@@ -2013,6 +2497,10 @@ function show(i, dir = null) {
   }
   
   highlightThumb();
+  updateViewerToolbar();
+  document.querySelectorAll('.catalog-card').forEach((card) => {
+    card.classList.toggle('is-focused', card.dataset.path === items[idx]?.path);
+  });
   closeCropMode();
   removeEditPreview();
   triggerPreload(i);
@@ -2110,7 +2598,7 @@ async function loadThumb({ el, path, retries }) {
 
   try {
     const tp = await invoke('get_thumbnail', { path, maxSide: thumbMaxSide });
-    const u = `folio://localhost/${encodeURIComponent(tp)}`;
+    const u = `folio://localhost/${encodeURIComponent(tp)}?v=${mediaCacheEpoch}`;
     const img = el.querySelector('img');
     if (img) {
       img.onload = () => img.classList.add('loaded');
@@ -2136,12 +2624,7 @@ const obs = new IntersectionObserver((entries) => {
   for (const en of entries) { if (en.isIntersecting && !en.target.dataset.loaded) { en.target.dataset.loaded = '1'; enqueueThumb(en.target, en.target.dataset.path); obs.unobserve(en.target); } }
 }, { root: filmstrip, rootMargin: '1000px 0px' });
 
-function buildFilmstrip() {
-  obs.disconnect(); filmstrip.innerHTML = '';
-  filmstrip.classList.toggle('grid-view', gridView);
-  gridToggleBtn?.classList.toggle('active', gridView);
-  
-  items.forEach((it, i) => {
+function appendFilmstripThumb(it, i) {
     const d = document.createElement('div');
     d.className = i === idx ? 'thumb active' : 'thumb';
     d.dataset.path = it.path;
@@ -2193,8 +2676,25 @@ function buildFilmstrip() {
       dotsContainer.appendChild(dot);
     });
     
-    filmstrip.appendChild(d); obs.observe(d);
-  });
+    filmstrip.appendChild(d);
+    obs.observe(d);
+}
+
+function buildFilmstrip() {
+  obs.disconnect();
+  filmstrip.innerHTML = '';
+  filmstrip.classList.toggle('grid-view', gridView);
+  gridToggleBtn?.classList.toggle('active', gridView);
+  if (!items.length) return;
+
+  const CHUNK = 48;
+  let at = 0;
+  const step = () => {
+    const end = Math.min(at + CHUNK, items.length);
+    for (; at < end; at++) appendFilmstripThumb(items[at], at);
+    if (at < items.length) requestAnimationFrame(step);
+  };
+  step();
 }
 
 function highlightThumb() {
@@ -2205,21 +2705,110 @@ function highlightThumb() {
   if (targetThumb) {
     targetThumb.classList.add('active');
     FolioState.activeThumbEl = targetThumb;
-    filmstrip.scrollTo({ top: targetThumb.offsetTop - filmstrip.clientHeight / 2 + targetThumb.clientHeight / 2, behavior: 'smooth' });
+    if (filmstrip.classList.contains('viewer-filmstrip')) {
+      filmstrip.scrollTo({ left: targetThumb.offsetLeft - filmstrip.clientWidth / 2 + targetThumb.clientWidth / 2, behavior: 'smooth' });
+    } else {
+      filmstrip.scrollTo({ top: targetThumb.offsetTop - filmstrip.clientHeight / 2 + targetThumb.clientHeight / 2, behavior: 'smooth' });
+    }
   }
 }
 
 /* ── Simple Edit Engine ── */
-const defaultEdit = () => ({ brightness: 0, vibrance: 0, flip_h: false, flip_v: false, rotate: 0 });
+const defaultEdit = () => ({
+  brightness: 0, vibrance: 0, contrast: 0, saturation: 0, exposure: 0, warmth: 0,
+  flip_h: false, flip_v: false, rotate: 0,
+});
+
+const BUILTIN_EDIT_PRESETS = [
+  { id: 'neutral', name: 'Neutral', edit: defaultEdit() },
+  { id: 'vivid', name: 'Vivid', edit: { ...defaultEdit(), vibrance: 28, saturation: 12, contrast: 10 } },
+  { id: 'matte', name: 'Matte', edit: { ...defaultEdit(), contrast: -12, brightness: 6, saturation: -8 } },
+  { id: 'warm', name: 'Warm glow', edit: { ...defaultEdit(), warmth: 35, exposure: 8, vibrance: 10 } },
+  { id: 'cool', name: 'Cool film', edit: { ...defaultEdit(), warmth: -28, contrast: 8, saturation: -5 } },
+  { id: 'mono', name: 'Mono punch', edit: { ...defaultEdit(), saturation: -100, contrast: 22, brightness: 4 } },
+  { id: 'fade', name: 'Faded', edit: { ...defaultEdit(), contrast: -18, brightness: 10, saturation: -12 } },
+  { id: 'pop', name: 'Pop', edit: { ...defaultEdit(), exposure: 12, contrast: 18, vibrance: 20 } },
+];
+
+function getCustomEditPresets() {
+  try {
+    return JSON.parse(localStorage.getItem('folio_edit_presets') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomEditPresets(list) {
+  localStorage.setItem('folio_edit_presets', JSON.stringify(list));
+}
+
+function renderEditPresets() {
+  const grid = $('editPresetGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const all = [...BUILTIN_EDIT_PRESETS, ...getCustomEditPresets()];
+  all.forEach((preset) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'edit-preset-chip';
+    btn.textContent = preset.name;
+    btn.addEventListener('click', () => {
+      const base = defaultEdit();
+      const merged = { ...base, ...preset.edit };
+      setCurrentEdit(merged);
+      loadEditForCurrent();
+      setInspectorTab('adjust');
+      openEditPanel();
+      showToast(`Applied “${preset.name}”`);
+    });
+    grid.appendChild(btn);
+  });
+}
 function getCurrentEdit() { return editMap.get(items[idx]?.path) || defaultEdit(); }
 function setCurrentEdit(edit) { if (items[idx]?.path) { editMap.set(items[idx].path, edit); invoke('set_edit', { path: items[idx].path, edit }).catch(() => {}); } }
 
+function isInspectorAdjustActive() {
+  return document.getElementById('inspectorAdjust')?.classList.contains('active');
+}
+
+function isEditPreviewEnabled() {
+  return editPanelOpen || adjustPreviewActive || isInspectorAdjustActive();
+}
+
+async function ensureEditSession() {
+  const path = items[idx]?.path;
+  if (!path || items[idx]?.is_video) return false;
+  adjustPreviewActive = true;
+  editPanel?.classList.add('visible');
+  editPanel?.setAttribute('aria-hidden', 'false');
+  if (editSessionPath !== path) {
+    try {
+      await invoke('prepare_edit_preview', { path });
+      editSessionPath = path;
+    } catch (e) {
+      console.error(e);
+      showToast('Could not prepare edit preview');
+      return false;
+    }
+  }
+  loadEditForCurrent();
+  return true;
+}
+
 async function openEditPanel() {
   const path = items[idx]?.path; if (!path || items[idx]?.is_video) return;
-  editPanelOpen = true; editPanel.classList.add('visible'); editPanel.setAttribute('aria-hidden', 'false'); editToggleBtn.classList.add('active');
+  setInspectorVisible(true);
+  setInspectorTab('adjust');
+  editPanelOpen = true;
+  adjustPreviewActive = true;
+  editPanel.classList.add('visible'); editPanel.setAttribute('aria-hidden', 'false'); editToggleBtn.classList.add('active');
   if (compareBtn) compareBtn.style.display = 'inline-block';
   requestAnimationFrame(() => { if (zoom <= 1) resetZoom(); else scheduleUpdate(); });
-  try { await invoke('prepare_edit_preview', { path }); loadEditForCurrent(); } catch (e) { console.error(e); }
+  try {
+    await invoke('prepare_edit_preview', { path });
+    editSessionPath = path;
+    loadEditForCurrent();
+  } catch (e) { console.error(e); }
 }
 
 let cropModeActive = false;
@@ -2394,15 +2983,18 @@ function setupCropEvents(img, overlay) {
 
 function closeEditPanel() {
   editPanelOpen = false;
-  editPanel.classList.remove('visible');
-  editPanel.setAttribute('aria-hidden', 'true');
   editToggleBtn.classList.remove('active');
   if (compareBtn) {
     compareBtn.style.display = 'none';
     toggleCompareMode(false);
   }
   closeCropMode();
-  removeEditPreview();
+  if (!isInspectorAdjustActive()) {
+    adjustPreviewActive = false;
+    editPanel.classList.remove('visible');
+    editPanel.setAttribute('aria-hidden', 'true');
+    removeEditPreview();
+  }
   requestAnimationFrame(() => { if (zoom <= 1) resetZoom(); else scheduleUpdate(); });
 }
 
@@ -2436,7 +3028,7 @@ function loadEditForCurrent() {
 function removeEditPreview() { if (editPreviewImg) { editPreviewImg.remove(); editPreviewImg = null; } }
 
 async function applyEditPreview(edit) {
-  const path = items[idx]?.path; if (!path || !editPanelOpen) return;
+  const path = items[idx]?.path; if (!path || !isEditPreviewEnabled()) return;
   const layer = media.querySelector('.media-layer.media-active'); if (!layer) return;
   clearTimeout(editDebounceTimer);
   editDebounceTimer = setTimeout(async () => {
@@ -2459,8 +3051,7 @@ $('openBtn').addEventListener('click', openFolder);
 $('openBtn2').addEventListener('click', openFolder);
 $('prev').addEventListener('click', () => nav(-1));
 $('next').addEventListener('click', () => nav(1));
-$('settingsClose').addEventListener('click', closeSettings);
-$('settingsBg').addEventListener('click', closeSettings);
+$('settingsBack')?.addEventListener('click', closeSettings);
 zoomSlider?.addEventListener('input', (e) => setZoom(parseInt(e.target.value) / 100, 0, 0));
 zoomReset?.addEventListener('click', resetZoom);
 fullscreenBtn?.addEventListener('click', toggleFullscreen);
@@ -2474,6 +3065,111 @@ sidebarToggle.addEventListener('click', () => {
   requestAnimationFrame(() => { if (zoom > 1) scheduleUpdate(); else resetZoom(); });
 });
 
+inspectorCollapseBtn?.addEventListener('click', () => {
+  setInspectorVisible(!inspectorPaneVisible);
+});
+
+$('saveEditPresetBtn')?.addEventListener('click', () => {
+  const name = prompt('Preset name');
+  if (!name?.trim()) return;
+  const custom = getCustomEditPresets();
+  custom.push({ id: `custom-${Date.now()}`, name: name.trim(), edit: { ...getCurrentEdit() } });
+  saveCustomEditPresets(custom.slice(-12));
+  renderEditPresets();
+  showToast(`Saved preset “${name.trim()}”`);
+});
+
+document.querySelectorAll('.inspector-tab').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const tab = btn.dataset.inspector;
+    setInspectorTab(tab);
+    if (tab === 'adjust') await ensureEditSession();
+    else if (!editPanelOpen) {
+      adjustPreviewActive = false;
+      removeEditPreview();
+    }
+    if (tab === 'info' && items[idx]) {
+      const img = getActiveImage();
+      if (img?.complete) drawDominantColors(items[idx]);
+      else img?.addEventListener('load', () => drawDominantColors(items[idx]), { once: true });
+    }
+  });
+});
+
+document.querySelectorAll('.nav-item[data-nav]').forEach((btn) => {
+  btn.addEventListener('click', () => applyNavFilter(btn.dataset.nav));
+});
+
+$('setDefaultAppBtn')?.addEventListener('click', () => bindDefaultAppAction('setDefault', $('setDefaultAppBtn')));
+$('openWithHelpBtn')?.addEventListener('click', () => bindDefaultAppAction('manual', $('openWithHelpBtn')));
+
+resetOnboardingBtn?.addEventListener('click', () => {
+  resetOnboarding();
+  welcome.classList.remove('hidden');
+  setAppShellVisible(false);
+  initOnboarding({
+    onOpenFolder: () => openFolder(),
+    onComplete: () => welcome.classList.remove('hidden'),
+    onSkip: () => welcome.classList.remove('hidden'),
+    onBindDefaultApp: (action, btn) => bindDefaultAppAction(action, btn),
+  });
+  showToast('Replay onboarding');
+});
+
+document.addEventListener('folio-theme-change', (e) => {
+  if (themeSelect) themeSelect.value = e.detail;
+  applyTheme(e.detail);
+});
+
+document.addEventListener('folio-vibrancy-change', (e) => {
+  if (vibrancyCheck) vibrancyCheck.checked = e.detail;
+  invoke('set_window_vibrancy', { enabled: e.detail }).catch(() => {});
+});
+
+async function bindDefaultAppAction(action, buttonEl) {
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Working…';
+  }
+  try {
+    if (action === 'setDefault') {
+      const result = await invoke('set_default_media_handler');
+      showToast(result.message);
+    } else {
+      await invoke('show_file_open_with_help', { samplePath: items[idx]?.path || null });
+      showToast('In Finder: choose Folio, then Change All… to set the default.');
+    }
+  } catch (err) {
+    showToast(String(err));
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = action === 'setDefault'
+        ? 'Set Folio as default for photos & videos'
+        : 'Show Finder “Open with” steps…';
+    }
+  }
+}
+
+if (!isOnboardingComplete()) {
+  initOnboarding({
+    onOpenFolder: () => openFolder(),
+    onComplete: () => welcome.classList.remove('hidden'),
+    onSkip: () => welcome.classList.remove('hidden'),
+    onBindDefaultApp: (action, btn) => bindDefaultAppAction(action, btn),
+  });
+}
+
+(async () => {
+  try {
+    const pending = await invoke('drain_pending_open_paths');
+    const last = pending?.length ? pending[pending.length - 1] : null;
+    if (last) await openMediaFromPath(last);
+  } catch (e) {
+    console.warn('Pending open paths:', e);
+  }
+})();
+
 gridToggleBtn?.addEventListener('click', () => {
   toggleCatalogView(!catalogModeActive);
 });
@@ -2483,11 +3179,13 @@ sidebarCatalogBtn?.addEventListener('click', () => {
 });
 
 let duplicateGroupsCache = null;
+let duplicateKeeperPaths = new Set();
 
 catalogDuplicatesBtn?.addEventListener('click', async () => {
   if (!items || items.length === 0) return;
   if (duplicateGroupsCache) {
     duplicateGroupsCache = null;
+    duplicateKeeperPaths.clear();
     catalogDuplicatesBtn.classList.remove('active');
     buildCatalogContent();
     return;
@@ -2508,8 +3206,11 @@ catalogDuplicatesBtn?.addEventListener('click', async () => {
       const colors = ['#E55E5E', '#4FA8EE', '#5BC2A8', '#D4A72C', '#AB6BFA', '#EE4F92'];
       duplicateGroupsCache = new Map();
       
+      duplicateKeeperPaths.clear();
       groups.forEach((group, index) => {
         const color = colors[index % colors.length];
+        const { keeperPath } = analyzeDuplicateGroup(group, items, mediaAttributesCache);
+        if (keeperPath) duplicateKeeperPaths.add(keeperPath);
         group.forEach(p => {
           duplicateGroupsCache.set(p, color);
         });
@@ -2538,7 +3239,7 @@ catalogDuplicatesBtn?.addEventListener('click', async () => {
 window.openGeotaggedImage = (path) => {
   const index = items.findIndex(it => it.path === path);
   if (index !== -1) {
-    mapCloseBtn.click();
+    closeGpsPopover();
     navTo(index);
   }
 };
@@ -2551,49 +3252,36 @@ catalogMapBtn?.addEventListener('click', () => {
     showToast('No geotagged media found in this folder.');
     return;
   }
-  showMapPopup(geotagged);
+  toggleGpsPopover(catalogMapBtn, geotagged);
 });
 
-// Duplicates Resolver Modal
+// Duplicates Resolver (UX-6)
 let currentDupGroupIndex = 0;
 let dupGroupsData = [];
 
 window.openDuplicateResolver = (groups) => {
   dupGroupsData = groups;
   currentDupGroupIndex = 0;
-  
   let modal = document.getElementById('duplicateResolverModal');
   if (!modal) {
     modal = document.createElement('div');
     modal.id = 'duplicateResolverModal';
-    Object.assign(modal.style, {
-      position: 'fixed', inset: '0',
-      background: 'rgba(0,0,0,0.6)',
-      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-      zIndex: '900',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', opacity: '0',
-      transition: 'opacity 0.25s ease',
-    });
-    document.body.appendChild(modal);
+    modal.className = 'dup-resolver-overlay';
     modal.addEventListener('click', (e) => {
       if (e.target === modal) closeDuplicateResolver();
     });
+    document.body.appendChild(modal);
   }
-  modal.style.display = 'flex';
-  requestAnimationFrame(() => { modal.style.opacity = '1'; });
+  modal.classList.add('is-open');
   renderDuplicateGroup();
 };
 
 window.closeDuplicateResolver = () => {
   const modal = document.getElementById('duplicateResolverModal');
-  if (modal) {
-    modal.style.opacity = '0';
-    setTimeout(() => { modal.style.display = 'none'; }, 250);
-  }
+  if (modal) modal.classList.remove('is-open');
 };
 
-window.renderDuplicateGroup = async () => {
+window.renderDuplicateGroup = () => {
   const modal = document.getElementById('duplicateResolverModal');
   if (!modal) return;
   if (currentDupGroupIndex >= dupGroupsData.length) {
@@ -2601,134 +3289,98 @@ window.renderDuplicateGroup = async () => {
     showToast('Finished reviewing all duplicate groups.');
     return;
   }
-  
+
   const groupPaths = dupGroupsData[currentDupGroupIndex];
-  
-  // Build the dialog container
+  const { scored, keeperPath, keeperReason } = analyzeDuplicateGroup(groupPaths, items, mediaAttributesCache);
+
   const dialog = document.createElement('div');
-  Object.assign(dialog.style, {
-    background: 'var(--modal-bg)',
-    backdropFilter: 'saturate(180%) blur(40px)',
-    WebkitBackdropFilter: 'saturate(180%) blur(40px)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '16px',
-    boxShadow: '0 32px 80px rgba(0,0,0,0.6)',
-    maxWidth: '680px', width: '90vw', maxHeight: '80vh',
-    display: 'flex', flexDirection: 'column',
-    overflow: 'hidden',
-  });
-  
-  // Header
-  const header = document.createElement('div');
-  Object.assign(header.style, {
-    padding: '16px 20px',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: '0',
-  });
-  const headerLeft = document.createElement('div');
-  const headerTitle = document.createElement('div');
-  headerTitle.textContent = 'Resolve Duplicates';
-  headerTitle.style.cssText = 'font-size: 13px; font-weight: 600; letter-spacing: 0.03em;';
-  const headerMeta = document.createElement('div');
-  headerMeta.textContent = `Group ${currentDupGroupIndex + 1} of ${dupGroupsData.length} · ${groupPaths.length} similar images`;
-  headerMeta.style.cssText = 'font-size: 11px; color: var(--text-tertiary); margin-top: 2px;';
-  headerLeft.append(headerTitle, headerMeta);
+  dialog.className = 'dup-resolver-dialog';
+  dialog.addEventListener('click', (e) => e.stopPropagation());
+
+  const header = document.createElement('header');
+  header.className = 'dup-resolver-header';
+  header.innerHTML = `
+    <div>
+      <h2 class="dup-resolver-title">Resolve duplicates</h2>
+      <p class="dup-resolver-meta">Group ${currentDupGroupIndex + 1} of ${dupGroupsData.length} · ${groupPaths.length} similar files</p>
+    </div>`;
   const closeBtn = document.createElement('button');
-  closeBtn.className = 'catalog-btn';
+  closeBtn.type = 'button';
+  closeBtn.className = 'catalog-btn dup-resolver-close';
   closeBtn.textContent = 'Close';
-  Object.assign(closeBtn.style, { fontSize: '11px', padding: '4px 12px' });
   closeBtn.addEventListener('click', closeDuplicateResolver);
-  header.appendChild(headerLeft);
   header.appendChild(closeBtn);
-  dialog.appendChild(header);
-  
-  // Cards container
-  const cardsContainer = document.createElement('div');
-  Object.assign(cardsContainer.style, {
-    padding: '20px', overflowY: 'auto',
-    display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap',
-  });
-  
-  for (let i = 0; i < groupPaths.length; i++) {
-    const path = groupPaths[i];
-    const name = path.split(/[\/\\]/).pop();
-    const item = items.find(it => it.path === path);
-    const sizeBytes = item ? item.size : 0;
-    const sz = sizeBytes > 0 ? (sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : '—';
-    const dims = item ? `${item.width || '?'}×${item.height || '?'}` : '';
-    
-    const card = document.createElement('div');
-    Object.assign(card.style, {
-      flex: '1', minWidth: '180px', maxWidth: '280px',
-      display: 'flex', flexDirection: 'column', gap: '10px',
-      padding: '14px', background: 'rgba(255,255,255,0.03)',
-      borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)',
-    });
-    
+
+  const keeperBanner = document.createElement('div');
+  keeperBanner.className = 'dup-resolver-keeper-banner';
+  keeperBanner.innerHTML = `
+    <span class="dup-resolver-keeper-badge">Recommended keep</span>
+    <span class="dup-resolver-keeper-reason">${keeperReason}</span>`;
+
+  const grid = document.createElement('div');
+  grid.className = 'dup-resolver-grid';
+
+  scored.forEach((entry) => {
+    const { path, item } = entry;
+    const isKeeper = path === keeperPath;
+    const name = path.split(/[/\\]/).pop();
+    const sz = entry.size > 0 ? `${(entry.size / 1024 / 1024).toFixed(2)} MB` : '—';
+    const dims = item?.width && item?.height ? `${item.width}×${item.height}` : '';
+
+    const card = document.createElement('article');
+    card.className = 'dup-resolver-card' + (isKeeper ? ' is-keeper' : ' is-alt');
+
+    if (isKeeper) {
+      const badge = document.createElement('span');
+      badge.className = 'dup-resolver-card-badge';
+      badge.textContent = 'Keep this one';
+      card.appendChild(badge);
+    } else {
+      const badge = document.createElement('span');
+      badge.className = 'dup-resolver-card-badge dup-resolver-card-badge--muted';
+      badge.textContent = 'Consider removing';
+      card.appendChild(badge);
+    }
+
     const img = document.createElement('img');
     img.src = `folio://localhost/${encodeURIComponent(path)}`;
-    Object.assign(img.style, {
-      width: '100%', aspectRatio: '4/3', objectFit: 'cover',
-      borderRadius: '6px', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-    });
-    
+    img.alt = name;
+    img.loading = 'lazy';
+
     const info = document.createElement('div');
-    info.style.textAlign = 'center';
-    const infoName = document.createElement('div');
-    infoName.textContent = name;
-    infoName.title = name;
-    infoName.style.cssText = 'font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-    const infoMeta = document.createElement('div');
-    infoMeta.textContent = `${sz}${dims ? ' · ' + dims : ''}`;
-    infoMeta.style.cssText = 'font-size: 10px; color: var(--text-tertiary); margin-top: 2px;';
-    info.append(infoName, infoMeta);
-    
-    const trashBtn = document.createElement('button');
-    trashBtn.className = 'catalog-btn';
-    Object.assign(trashBtn.style, {
-      width: '100%', justifyContent: 'center',
-      borderColor: 'rgba(255,100,100,0.3)', color: '#ff8a8a', fontSize: '11px',
-    });
-    trashBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg> Trash`;
-    
-    // Use a closure to capture the path safely — no inline onclick
-    trashBtn.addEventListener('click', () => trashDuplicate(path));
+    info.className = 'dup-resolver-card-info';
+    info.innerHTML = `<div class="dup-resolver-card-name" title="${name}">${name}</div>
+      <div class="dup-resolver-card-meta">${sz}${dims ? ` · ${dims}` : ''}</div>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'dup-resolver-card-actions';
     const finderBtn = document.createElement('button');
+    finderBtn.type = 'button';
     finderBtn.className = 'catalog-btn';
-    Object.assign(finderBtn.style, {
-      width: '100%', justifyContent: 'center', fontSize: '11px',
-    });
-    finderBtn.textContent = 'Show in Finder';
+    finderBtn.textContent = 'Finder';
     finderBtn.addEventListener('click', () => openPathInFinder(path, true));
-    
-    card.appendChild(img);
-    card.appendChild(info);
-    card.appendChild(finderBtn);
-    card.appendChild(trashBtn);
-    cardsContainer.appendChild(card);
-  }
-  dialog.appendChild(cardsContainer);
-  
-  // Footer
-  const footer = document.createElement('div');
-  Object.assign(footer.style, {
-    padding: '12px 20px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: '0',
+    const trashBtn = document.createElement('button');
+    trashBtn.type = 'button';
+    trashBtn.className = 'catalog-btn dup-resolver-trash';
+    trashBtn.textContent = 'Trash';
+    trashBtn.addEventListener('click', () => trashDuplicate(path));
+    actions.append(finderBtn, trashBtn);
+
+    card.append(img, info, actions);
+    grid.appendChild(card);
   });
-  const hint = document.createElement('span');
-  hint.style.cssText = 'font-size: 11px; color: var(--text-tertiary);';
-  hint.textContent = 'Click Trash on items you don\'t need';
+
+  const footer = document.createElement('footer');
+  footer.className = 'dup-resolver-footer';
+  footer.innerHTML = '<span class="dup-resolver-hint">Keep the highlighted file; trash extras you do not need.</span>';
   const nextBtn = document.createElement('button');
-  nextBtn.className = 'catalog-btn';
-  Object.assign(nextBtn.style, { color: 'var(--accent-gold)', borderColor: 'rgba(212,167,44,0.3)', fontSize: '11px' });
-  nextBtn.textContent = currentDupGroupIndex < dupGroupsData.length - 1 ? 'Next Group →' : 'Done';
+  nextBtn.type = 'button';
+  nextBtn.className = 'catalog-btn dup-resolver-next';
+  nextBtn.textContent = currentDupGroupIndex < dupGroupsData.length - 1 ? 'Next group →' : 'Done';
   nextBtn.addEventListener('click', () => { currentDupGroupIndex++; renderDuplicateGroup(); });
-  footer.appendChild(hint);
   footer.appendChild(nextBtn);
-  dialog.appendChild(footer);
-  
-  // Replace modal content
+
+  dialog.append(header, keeperBanner, grid, footer);
   modal.innerHTML = '';
   modal.appendChild(dialog);
 };
@@ -2932,198 +3584,131 @@ editExportBtn?.addEventListener('click', async () => {
   } catch (e) { showToast('Export failed'); }
 });
 
-document.querySelectorAll('.edit-slider').forEach(s => {
-  s.addEventListener('input', () => {
-    const val = parseFloat(s.value);
-    const valEl = s.closest('.edit-row')?.querySelector('.edit-val');
-    if (valEl) valEl.textContent = Math.round(val);
-    const e = getCurrentEdit(); e[s.dataset.param] = val; setCurrentEdit(e); applyEditPreview(e);
+function bindEditSliders() {
+  document.querySelectorAll('.edit-slider').forEach((s) => {
+    if (s.dataset.bound === '1') return;
+    s.dataset.bound = '1';
+    const endSliderDrag = () => { FolioState.isSliderActive = false; };
+    s.addEventListener('pointerdown', () => {
+      FolioState.isSliderActive = true;
+      ensureEditSession();
+    });
+    s.addEventListener('pointerup', endSliderDrag);
+    s.addEventListener('pointercancel', endSliderDrag);
+    s.addEventListener('input', () => {
+      const val = parseFloat(s.value);
+      const valEl = s.closest('.edit-row')?.querySelector('.edit-val');
+      if (valEl) valEl.textContent = Math.round(val);
+      const edit = getCurrentEdit();
+      edit[s.dataset.param] = val;
+      setCurrentEdit(edit);
+      applyEditPreview(edit);
+    });
   });
-});
+}
+bindEditSliders();
 
 /* ── Global Handlers ── */
-let cursorX = 0, cursorY = 0;
-let targetX = 0, targetY = 0;
-let isHoveringCursor = false;
-let cursorActivated = false;
-let cursorLoopRunning = false;
-
-function wakeCursorLoop() {
-  if (!cursorLoopRunning) {
-    cursorLoopRunning = true;
-    requestAnimationFrame(updateCursorLoop);
-  }
+function modifierActive(e, mod) {
+  if (mod === 'Shift') return e.shiftKey || e.getModifierState?.('Shift') === true;
+  if (mod === 'Control' || mod === 'Ctrl') return e.ctrlKey || e.getModifierState?.('Control') === true;
+  if (mod === 'Alt' || mod === 'Option') return e.altKey || e.getModifierState?.('Alt') === true;
+  if (mod === 'Meta' || mod === 'Cmd' || mod === 'Command') return e.metaKey || e.getModifierState?.('Meta') === true;
+  const prop = mod.toLowerCase() + 'Key';
+  return !!e[prop];
 }
 
-// Track custom cursor variants globally
-let isEwResizeCursor = false;
-let isCrosshairCursor = false;
-let activeMagneticElement = null;
-let magneticCenter = null;
-
-window.addEventListener('mousemove', (e) => {
-  targetX = e.clientX;
-  targetY = e.clientY;
-  cursorActivated = true;
-  
-  const inTL = !isFullscreen && e.clientX <= 80 && e.clientY <= 40;
-  if (useCustomCursor) setTrafficLightHover(inTL);
-  
-  const ewTarget = e.target.closest('#sidebarResizer, #editorialResizer, .sidebar-resizer, .editorial-resizer') || isResizingSidebar || isResizingExif;
-  const crosshairTarget = e.target.closest('input[type="range"], .slider, .scrubber') || FolioState.isSliderActive || FolioState.isVolumeActive || FolioState.isScrubbingActive;
-  
-  isEwResizeCursor = !!ewTarget;
-  isCrosshairCursor = !!crosshairTarget;
-  
-  isHoveringCursor = !!(
-    e.target.closest('button, .thumb, input, select, .welcome-btn, .sidebar-dragbar, .sidebar-toggle, .grid-toggle-btn, .sidebar-resizer, .editorial-resizer') ||
-    FolioState.isSliderActive ||
-    FolioState.isVolumeActive ||
-    FolioState.isScrubbingActive
-  );
-  
-  // FE-9 Magnetic Interactive Hover Targets
-  if (!reducedMotionEnabled) {
-    const mag = e.target.closest('button, .palette-chip, .gps-chip, .tab-btn');
-    if (mag) {
-      if (activeMagneticElement && activeMagneticElement !== mag) {
-        activeMagneticElement.style.transform = '';
-        activeMagneticElement.style.transition = 'transform 0.25s ease';
-        magneticCenter = null;
-      }
-      activeMagneticElement = mag;
-      
-      if (!magneticCenter || magneticCenter.element !== mag) {
-        const prevTransform = mag.style.transform;
-        mag.style.transform = '';
-        const rect = mag.getBoundingClientRect();
-        mag.style.transform = prevTransform;
-        
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        const threshold = Math.max(rect.width, rect.height) / 2 + 15;
-        magneticCenter = { element: mag, cx, cy, threshold };
-      }
-      
-      const dx = e.clientX - magneticCenter.cx;
-      const dy = e.clientY - magneticCenter.cy;
-      const dist = Math.hypot(dx, dy);
-      
-      if (dist < magneticCenter.threshold) {
-        const pullX = (dx / dist) * 3;
-        const pullY = (dy / dist) * 3;
-        
-        let transformStr = `translate(${pullX}px, ${pullY}px)`;
-        mag.style.transform = transformStr;
-        mag.style.transition = 'transform 0.15s cubic-bezier(0.25, 0.8, 0.25, 1.4)';
-      } else {
-        mag.style.transform = '';
-        mag.style.transition = 'transform 0.25s ease';
-        magneticCenter = null;
-      }
-    } else {
-      if (activeMagneticElement) {
-        activeMagneticElement.style.transform = '';
-        activeMagneticElement.style.transition = 'transform 0.25s ease';
-        activeMagneticElement = null;
-        magneticCenter = null;
-      }
-    }
-  } else if (activeMagneticElement) {
-    activeMagneticElement.style.transform = '';
-    activeMagneticElement = null;
-    magneticCenter = null;
-  }
-  
-  wakeCursorLoop();
-});
-
-document.addEventListener('mouseleave', () => {
-  cursorActivated = false;
-  if (customCursor) customCursor.style.opacity = 0;
-  wakeCursorLoop();
-});
-
-document.addEventListener('mouseenter', () => {
-  cursorActivated = true;
-  wakeCursorLoop();
-});
-
-function updateCursorLoop() {
-  if (!useCustomCursor) {
-    if (customCursor) customCursor.style.opacity = 0;
-    cursorLoopRunning = false;
-    return;
-  }
-  
-  if (!trafficLightHover && cursorActivated) {
-    const dx = targetX - cursorX;
-    const dy = targetY - cursorY;
-    
-    // ProMotion continuous lerp interpolation (calibrated based on screen refresh rate deltas)
-    const factor = refreshRateType === 120 ? 0.15 : 0.28;
-    cursorX += dx * factor;
-    cursorY += dy * factor;
-    
-    if (customCursor) {
-      customCursor.style.opacity = 1;
-      customCursor.style.transform = `translate(${cursorX}px, ${cursorY}px)`;
-      customCursor.classList.toggle('hovering', isHoveringCursor);
-      customCursor.classList.toggle('ew-resize', isEwResizeCursor);
-      customCursor.classList.toggle('crosshair', isCrosshairCursor);
-    }
-    
-    // Close enough to destination -> sleep the loop to save energy
-    if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
-      cursorX = targetX;
-      cursorY = targetY;
-      if (customCursor) {
-        customCursor.style.transform = `translate(${cursorX}px, ${cursorY}px)`;
-      }
-      cursorLoopRunning = false;
-      return;
-    }
-  } else {
-    if (customCursor) customCursor.style.opacity = 0;
-    cursorLoopRunning = false;
-    return;
-  }
-  
-  requestAnimationFrame(updateCursorLoop);
+function isZoomModifierDown(e) {
+  return modifierActive(e, keybinds.modifierZoom || 'Shift');
 }
-wakeCursorLoop();
 
-media.addEventListener('wheel', (e) => {
-  const img = getActiveImage(); if (!img) return;
-  
-  if (e.ctrlKey) {
-    // Native Trackpad Pinch-to-Zoom
-    e.preventDefault();
-    const scale = Math.exp(-e.deltaY * 0.01);
-    const rect = media.getBoundingClientRect();
-    setZoom(zoom * scale, e.clientX - (rect.left + rect.width / 2), e.clientY - (rect.top + rect.height / 2));
+/** Scale wheel deltas so mouse notches and trackpad gestures feel similar. */
+function wheelDeltaForZoom(e) {
+  let dy;
+  let dx;
+  switch (e.deltaMode) {
+    case 1: // DOM_DELTA_LINE — typical mouse wheel
+      dy = e.deltaY * 48;
+      dx = e.deltaX * 48;
+      break;
+    case 2: // DOM_DELTA_PAGE
+      dy = e.deltaY * 320;
+      dx = e.deltaX * 320;
+      break;
+    default: // DOM_DELTA_PIXEL — trackpad
+      dy = e.deltaY;
+      dx = e.deltaX;
+      break;
+  }
+  const shiftHeld = e.shiftKey || e.getModifierState?.('Shift');
+  if (shiftHeld) {
+    if (Math.abs(dx) > Math.abs(dy) * 0.35) return -dx;
+    return dy;
+  }
+  if (Math.abs(dy) >= Math.abs(dx)) return dy;
+  return -dx;
+}
+
+function isViewerWheelTarget(e) {
+  if (!viewer || viewer.style.display === 'none') return false;
+  const t = e.target;
+  if (!t || !(t instanceof Node)) return false;
+  return viewer.contains(t);
+}
+
+function isMediaWheelTarget(e) {
+  if (!media) return false;
+  const t = e.target;
+  if (!t || !(t instanceof Node)) return false;
+  return media.contains(t) || t === media;
+}
+
+function isFilmstripWheelTarget(e) {
+  return !!e.target?.closest?.('.filmstrip');
+}
+
+initZoomController({
+  getZoom: () => zoom,
+  setZoom: (level, cx, cy, opts) => setZoom(level, cx, cy, opts),
+  getZoomSens: () => zoomSens,
+});
+
+function handleViewerWheel(e) {
+  if (!items.length || catalogModeActive || !isViewerWheelTarget(e)) return;
+  if (!media) return;
+
+  const wantsZoom = (e.ctrlKey || e.metaKey) || isZoomModifierDown(e);
+  const onFilmstrip = isFilmstripWheelTarget(e);
+  const onMedia = isMediaWheelTarget(e);
+
+  if (!wantsZoom) {
+    if (onFilmstrip) return;
+    if (zoom > 1 && onMedia) {
+      e.preventDefault();
+      panX -= e.deltaX;
+      panY -= e.deltaY;
+      scheduleUpdate();
+    }
     return;
   }
 
-  const mod = keybinds.modifierZoom.toLowerCase() + 'Key';
-  if (e[mod]) {
-    // Keyboard-modifier Scroll Zoom
-    e.preventDefault();
-    const scale = Math.exp(-(e.deltaY || e.deltaX) * 0.001 * (zoomSens / 5));
-    const rect = media.getBoundingClientRect();
-    setZoom(zoom * scale, e.clientX - (rect.left + rect.width / 2), e.clientY - (rect.top + rect.height / 2));
-  } else if (zoom > 1) {
-    // Fluid 2D Panning when zoomed in
-    e.preventDefault();
-    panX -= e.deltaX;
-    panY -= e.deltaY;
-    scheduleUpdate();
-  }
-}, { passive: false });
+  const delta = wheelDeltaForZoom(e);
+  if (!delta) return;
+
+  const rect = media.getBoundingClientRect();
+  const focalX = e.clientX - (rect.left + rect.width / 2);
+  const focalY = e.clientY - (rect.top + rect.height / 2);
+
+  e.preventDefault();
+  e.stopPropagation();
+  queueWheelZoom(delta, focalX, focalY);
+}
+
+window.addEventListener('wheel', handleViewerWheel, { passive: false, capture: true });
 
 media.addEventListener('mousedown', async (e) => {
   if (zoom <= 1 && e.button === 0) {
-    if (e.target.closest('video') || e.target.closest('.video-controls')) return;
+    if (e.target.closest('video') || e.target.closest('#viewerToolbar')) return;
     e.preventDefault();
     getCurrentWindow().startDragging();
     return;
@@ -3174,6 +3759,11 @@ window.addEventListener('keydown', (e) => {
       return;
     }
     
+    if (key === 'Escape' && settingsPage?.style.display !== 'none') {
+      closeSettings();
+      return;
+    }
+
     if (catalogModeActive) {
       if (key === 'Escape') {
         toggleCatalogView(false);
@@ -3189,19 +3779,15 @@ window.addEventListener('keydown', (e) => {
     if (matchesKey(keybinds.nextImage)) nav(1);
     else if (matchesKey(keybinds.prevImage)) nav(-1);
     else if (matchesKey(keybinds.playVideo)) {
-      const activeVideo = media.querySelector('.media-layer.media-active video');
-      if (activeVideo) {
-        e.preventDefault();
-        const playBtn = media.querySelector('.media-layer.media-active .v-play-btn');
-        if (playBtn) playBtn.click();
-      }
+      if (toggleVideoPlayback()) e.preventDefault();
     }
     else if (matchesKey(keybinds.editMode)) editToggleBtn.click();
     else if (matchesKey(keybinds.addTag)) { e.preventDefault(); showTagPill(); }
     else if (matchesKey(keybinds.toggleMetadata)) {
         overlayVisible = !overlayVisible;
-        edOverlay.classList.toggle('visible', overlayVisible);
         if (overlayVisible) {
+            setInspectorVisible(true);
+            setInspectorTab('info');
             drawHistogram(getActiveImage());
             drawDominantColors(items[idx]);
         }
@@ -3211,6 +3797,7 @@ window.addEventListener('keydown', (e) => {
     else if (matchesKey(keybinds.toggleZen)) toggleZenMode();
     else if (matchesKey(keybinds.toggleCatalog)) { e.preventDefault(); toggleCatalogView(!catalogModeActive); }
     else if (matchesKey(keybinds.resetZoom)) resetZoom();
+    else if (matchesKey(keybinds.goHome)) { e.preventDefault(); goHome(); }
     else if (key === 'Backspace' || key === 'Delete') {
       if (items && items.length > 0) {
         e.preventDefault();
@@ -3236,7 +3823,7 @@ getCurrentWebview().onDragDropEvent(async (event) => {
     try {
       const p = await invoke('open_specific_folder', { path: paths[0] });
       await invoke('add_recent_folder', { path: paths[0] });
-      renderRecentFolders();
+      renderHomeHub();
       loadFolderData(p);
     } catch (err) { console.error(err); }
   }
@@ -3455,16 +4042,67 @@ function extractDominantColor(imgEl) {
 
 /* ── Init ── */
 applyTheme(currentTheme);
-renderRecentFolders();
+initHomeScroll();
+renderHomeHub();
+renderEditPresets();
 listen('menu-open-folder', openFolder);
 listen('menu-open-in-finder', openCurrentFolderInFinder);
 listen('menu-settings', openSettings);
+listen('folio-open-path', async (event) => {
+  const filePath = event?.payload;
+  if (filePath) await openMediaFromPath(filePath);
+});
+
+document.addEventListener('folio-pref-change', (e) => {
+  const { key, value } = e.detail || {};
+  if (key === 'high_contrast') {
+    highContrastEnabled = value;
+    localStorage.setItem('folio_high_contrast', value);
+    document.body.classList.toggle('high-contrast', value);
+    if (highContrastCheck) highContrastCheck.checked = value;
+  } else if (key === 'reduced_motion') {
+    reducedMotionEnabled = value;
+    localStorage.setItem('folio_reduced_motion', value);
+    document.body.classList.toggle('prefers-reduced-motion', value);
+    if (reducedMotionCheck) reducedMotionCheck.checked = value;
+  } else if (key === 'cinematic') {
+    cinematicEnabled = value;
+    localStorage.setItem('folio_cinematic', value);
+    if (cinematicCheck) cinematicCheck.checked = value;
+  } else if (key === 'sort') {
+    currentSort = value;
+    localStorage.setItem('folio_sort', value);
+    if (sortSelect) sortSelect.value = value;
+    sortItems();
+    if (items.length) buildFilmstrip();
+  } else if (key === 'show_recents') {
+    showRecentFolders = value;
+    localStorage.setItem('folio_show_recents', value);
+    if (recentFoldersCheck) recentFoldersCheck.checked = value;
+    renderHomeHub();
+  } else if (key === 'prefetch') {
+    prefetchEnabled = value;
+    localStorage.setItem('folio_prefetch_enabled', value);
+    if (prefetchCheck) prefetchCheck.checked = value;
+  } else if (key === 'strip_metadata') {
+    stripMetadataEnabled = value;
+    localStorage.setItem('folio_strip_metadata', value);
+    if (stripMetadataCheck) stripMetadataCheck.checked = value;
+  } else if (key === 'sound_volume') {
+    soundVolume = value;
+    localStorage.setItem('folio_sound_volume', value);
+    if (soundVolumeSlider) soundVolumeSlider.value = value;
+    if (soundVolumeVal) soundVolumeVal.textContent = `${value}%`;
+  } else if (key === 'zoom_sens') {
+    zoomSens = value;
+    localStorage.setItem('folio_zoom_sens', value);
+    if (zoomSensSlider) zoomSensSlider.value = value;
+  }
+});
 if (cinematicCheck) cinematicCheck.checked = cinematicEnabled;
 if (themeSelect) themeSelect.value = currentTheme;
 if (sortSelect) sortSelect.value = currentSort;
 if (zoomSensSlider) zoomSensSlider.value = zoomSens;
-if (customCursorCheck) customCursorCheck.checked = useCustomCursor;
-
 // Initialize grid thumbnail size CSS variable globally
 document.documentElement.style.setProperty('--grid-thumb-size', `${gridThumbSize}px`);
 
@@ -3551,67 +4189,64 @@ function formatBytes(bytes, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
+async function loadStorageDiagnostics() {
+  try {
+    const data = await invoke('get_storage_diagnostics');
+    if (dbSizeVal) dbSizeVal.textContent = formatBytes(data.db_size);
+    if (cacheSizeVal) cacheSizeVal.textContent = formatBytes(data.cache_size);
+    if (thumbCacheLimitInput && data.thumbnail_cache_limit_bytes) {
+      thumbCacheLimitInput.value = (data.thumbnail_cache_limit_bytes / 1024 / 1024 / 1024).toFixed(2);
+    }
+    if (decodedCacheLimitInput && data.decoded_cache_limit_bytes) {
+      decodedCacheLimitInput.value = (data.decoded_cache_limit_bytes / 1024 / 1024 / 1024).toFixed(1);
+    }
+    if (decodedSizeVal) decodedSizeVal.textContent = formatBytes(data.decoded_size);
+    if (cpuLoadVal) cpuLoadVal.textContent = data.cpu_used_pct.toFixed(1) + '%';
+    if (ramSizeVal) ramSizeVal.textContent = formatBytes(data.memory_used_kb * 1024);
+    return data;
+  } catch (err) {
+    console.error('Failed to fetch storage diagnostics:', err);
+    return null;
+  }
+}
+
 let diagnosticsInterval = null;
 function startDiagnosticsPolling() {
   if (diagnosticsInterval) return;
   diagnosticsInterval = setInterval(async () => {
     const isHudActive = localStorage.getItem('folio_performance_hud') === 'true';
-    const isStorageTabActive = settingsModal.style.display !== 'none' && document.querySelector('.tab-btn[data-tab="storage"]').classList.contains('active');
+    const activeTab = document.querySelector('.settings-nav-item.active')?.dataset?.tab;
+    const isDiagnosticsTab = settingsPage?.style.display !== 'none'
+      && (activeTab === 'cache' || activeTab === 'advanced');
     
-    if (isHudActive || isStorageTabActive) {
-      try {
-        const data = await invoke('get_storage_diagnostics');
-        const dbSizeStr = formatBytes(data.db_size);
-        const cacheSizeStr = formatBytes(data.cache_size);
-        const decodedSizeStr = formatBytes(data.decoded_size);
-        const memStr = formatBytes(data.memory_used_kb * 1024);
-        const cpuStr = data.cpu_used_pct.toFixed(1) + '%';
-        
-        if (isStorageTabActive) {
-        if (dbSizeVal) dbSizeVal.textContent = dbSizeStr;
-        if (cacheSizeVal) cacheSizeVal.textContent = cacheSizeStr;
-          if (decodedSizeVal) decodedSizeVal.textContent = decodedSizeStr;
-          if (cpuLoadVal) cpuLoadVal.textContent = cpuStr;
-          if (ramSizeVal) ramSizeVal.textContent = memStr;
-        }
-        
-        if (isHudActive) {
-          const hudCpuVal = $('hudCpuVal');
-          const hudMemoryVal = $('hudMemoryVal');
-          if (hudCpuVal) hudCpuVal.textContent = cpuStr;
-          if (hudMemoryVal) hudMemoryVal.textContent = memStr;
-        }
-      } catch (err) {
-        console.error("Failed to fetch storage diagnostics:", err);
+    if (isHudActive || isDiagnosticsTab) {
+      const data = await loadStorageDiagnostics();
+      if (!data) return;
+      const memStr = formatBytes(data.memory_used_kb * 1024);
+      const cpuStr = data.cpu_used_pct.toFixed(1) + '%';
+      if (isHudActive) {
+        const hudCpuVal = $('hudCpuVal');
+        const hudMemoryVal = $('hudMemoryVal');
+        if (hudCpuVal) hudCpuVal.textContent = cpuStr;
+        if (hudMemoryVal) hudMemoryVal.textContent = memStr;
       }
     }
   }, 1000);
 }
 
-/* ── Settings Tab Switching ── */
-document.querySelectorAll('.tab-btn').forEach(btn => {
+/* ── Settings navigation ── */
+document.querySelectorAll('.settings-nav-item').forEach(btn => {
   btn.addEventListener('click', async () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
-    const pane = $('tab-' + btn.dataset.tab);
+    const pane = $('tab-' + tab);
     if (pane) pane.classList.add('active');
-    
-    if (btn.dataset.tab === 'storage') {
-      try {
-        const data = await invoke('get_storage_diagnostics');
-        if (dbSizeVal) dbSizeVal.textContent = formatBytes(data.db_size);
-        if (cacheSizeVal) cacheSizeVal.textContent = formatBytes(data.cache_size);
-        if (thumbCacheLimitInput && data.thumbnail_cache_limit_bytes) {
-          thumbCacheLimitInput.value = (data.thumbnail_cache_limit_bytes / 1024 / 1024 / 1024).toFixed(2);
-        }
-        if (decodedSizeVal) decodedSizeVal.textContent = formatBytes(data.decoded_size);
-        if (cpuLoadVal) cpuLoadVal.textContent = data.cpu_used_pct.toFixed(1) + '%';
-        if (ramSizeVal) ramSizeVal.textContent = formatBytes(data.memory_used_kb * 1024);
-      } catch (err) {
-        console.error("Failed to query diagnostics:", err);
-      }
+    if (settingsPaneTitle && SETTINGS_PANE_TITLES[tab]) {
+      settingsPaneTitle.textContent = SETTINGS_PANE_TITLES[tab];
     }
+    if (tab === 'cache' || tab === 'advanced') await loadStorageDiagnostics();
   });
 });
 
@@ -3670,48 +4305,119 @@ performanceHudCheck?.addEventListener('change', (e) => {
   }
 });
 
-// Purge local cache button wiring
-purgeCacheBtn?.addEventListener('click', async () => {
-  if (confirm("Are you absolutely sure you want to purge all local cache, database indices, and thumbnails? This action is irreversible.")) {
-    try {
-      purgeCacheBtn.disabled = true;
-      purgeCacheBtn.textContent = 'Purging...';
-      await invoke('purge_cache');
-      showToast("Cache purged successfully. Catalog database has been reset.");
-      
-      items = [];
-      idx = -1;
-      selectedCatalogPaths.clear();
-      if (typeof buildCatalogContent === 'function') buildCatalogContent();
-      if (typeof toggleCatalogView === 'function') toggleCatalogView(false);
-      
-      welcome.style.display = 'flex';
-      welcomeBg.style.display = 'block';
-      viewer.style.display = 'none';
-      sidebar.style.display = 'none';
-      
-      const data = await invoke('get_storage_diagnostics');
-      if (dbSizeVal) dbSizeVal.textContent = formatBytes(data.db_size);
-      if (cacheSizeVal) cacheSizeVal.textContent = formatBytes(data.cache_size);
-      if (decodedSizeVal) decodedSizeVal.textContent = formatBytes(data.decoded_size);
-      if (cpuLoadVal) cpuLoadVal.textContent = data.cpu_used_pct.toFixed(1) + '%';
-      if (ramSizeVal) ramSizeVal.textContent = formatBytes(data.memory_used_kb * 1024);
-    } catch (err) {
-      showToast(`Purge failed: ${err}`);
-    } finally {
-      purgeCacheBtn.disabled = false;
-      purgeCacheBtn.textContent = 'Purge All Local Cache';
-    }
-  }
-});
+let mediaCacheEpoch = 0;
 
-if (customCursorCheck) {
-  customCursorCheck.addEventListener('change', (e) => {
-    useCustomCursor = e.target.checked;
-    localStorage.setItem('folio_custom_cursor', useCustomCursor);
-    updateCursorVisibility();
-    wakeCursorLoop();
-  });
+async function reloadLibraryAfterCacheClear(cacheResult) {
+  const folderToReload = openedLibraryPath;
+  selectedCatalogPaths.clear();
+  updateTranscodeHud();
+  mediaCacheEpoch += 1;
+  preloadedThumbs.clear();
+  preloadCache.clear();
+  for (const path of [...videoPreloadCache.keys()]) evictVideoPreload(path);
+  if (folderToReload) {
+    try {
+      if (cacheResult?.items_reindexed > 0) {
+        items = processLoadedItems(await invoke('get_folder_items'));
+        sortItems();
+        idx = Math.min(idx, Math.max(0, items.length - 1));
+        clearEmptyState(catalogStateHost);
+        clearEmptyState(viewerStateHost);
+        updateWorkspaceLayout();
+        if (catalogModeActive) buildCatalogContent();
+        else {
+          buildFilmstrip();
+          show(idx);
+        }
+        Promise.all([renderTagFilters(), loadMediaAttributes()]).catch((e) => console.error(e));
+      } else {
+        const refreshed = await invoke('refresh_active_library');
+        if (refreshed?.items?.length) {
+          items = processLoadedItems(refreshed.items);
+          sortItems();
+          idx = Math.min(idx, Math.max(0, items.length - 1));
+          clearEmptyState(catalogStateHost);
+          clearEmptyState(viewerStateHost);
+          updateWorkspaceLayout();
+          if (catalogModeActive) buildCatalogContent();
+          else {
+            buildFilmstrip();
+            show(idx);
+          }
+          Promise.all([renderTagFilters(), loadMediaAttributes()]).catch((e) => console.error(e));
+        } else {
+          await loadFolderData(folderToReload);
+        }
+      }
+      showToast('Library refreshed after cache clear.');
+    } catch (e) {
+      console.error('[Folio] refresh after cache clear:', e);
+      await loadFolderData(folderToReload);
+      showToast('Library reloaded after cache clear.');
+    }
+  } else if (items.length) {
+    buildCatalogContent?.();
+  }
+  await loadStorageDiagnostics();
+}
+
+function cacheClearToast(label, result) {
+  const freed = result?.bytes_freed ? ` Freed ${formatBytes(result.bytes_freed)}.` : '';
+  const warn = result?.warnings?.length ? ` (${result.warnings.length} warnings)` : '';
+  showToast(`${label} complete.${freed}${warn}`);
+}
+
+async function runCacheAction(btn, label, invokeName, confirmMsg) {
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  const prev = btn?.textContent;
+  try {
+    setInlineStatus(cacheActionStatus, `${label}…`, 'loading');
+    if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+    const result = await invoke(invokeName);
+    cacheClearToast(label, result);
+    setInlineStatus(cacheActionStatus, `${label} complete.`, 'success');
+    await reloadLibraryAfterCacheClear(result);
+  } catch (err) {
+    showToast(`${label} failed: ${err}`);
+    setInlineStatus(cacheActionStatus, `${label} failed: ${err}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+clearThumbsBtn?.addEventListener('click', () => runCacheAction(
+  clearThumbsBtn, 'Thumbnails cleared', 'clear_thumbnail_cache',
+  'Clear all thumbnail files? The library will rebuild previews on next browse.',
+));
+clearDecodedBtn?.addEventListener('click', () => runCacheAction(
+  clearDecodedBtn, 'Decoded cache cleared', 'clear_decoded_cache',
+  'Clear decoded full-size image cache?',
+));
+clearMetadataBtn?.addEventListener('click', () => runCacheAction(
+  clearMetadataBtn, 'Metadata index cleared', 'clear_metadata_database',
+  'Clear the metadata index (EXIF cache and histograms)? Tags and ratings are kept.',
+));
+purgeCacheBtn?.addEventListener('click', () => runCacheAction(
+  purgeCacheBtn, 'All local cache cleared', 'purge_cache',
+  'Clear thumbnails, decoded images, and metadata index? Tags, ratings, and albums are kept.',
+));
+resetLibraryMetadataBtn?.addEventListener('click', () => runCacheAction(
+  resetLibraryMetadataBtn,
+  'Library metadata reset',
+  'reset_library_metadata',
+  'Remove all tags, ratings, albums, and per-image metadata? This cannot be undone.',
+));
+
+function initHomeScroll() {
+  const scrollEl = document.querySelector('.home-side-scroll');
+  const hub = $('welcome');
+  scrollEl?.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+  hub?.addEventListener('wheel', (e) => {
+    if (e.target === hub || e.target.closest('.home-main')) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, { passive: false });
 }
 
 if (zoomSensSlider) {
@@ -3767,16 +4473,6 @@ window.addEventListener('keydown', (e) => {
   activeKeybindBtn.classList.remove('recording');
   activeKeybindBtn = null;
 }, true);
-
-/* ── Welcome Parallax & Zen Mode ── */
-welcome.addEventListener('mousemove', (e) => {
-  const w = welcome.clientWidth;
-  const h = welcome.clientHeight;
-  const x = (e.clientX - w / 2) / (w / 2);
-  const y = (e.clientY - h / 2) / (h / 2);
-  welcomeBg.style.setProperty('--parallax-x', `${x * -20}px`);
-  welcomeBg.style.setProperty('--parallax-y', `${y * -20}px`);
-});
 
 function collapseSidebar() {
   if (sidebar && sidebar.style.display !== 'none') {
@@ -3916,6 +4612,7 @@ function showDeleteConfirmation(itemPath, itemIndex) {
   dialog.style.boxShadow = '0 30px 60px rgba(0,0,0,0.7)';
   dialog.style.maxWidth = '360px';
   dialog.style.width = '90%';
+  dialog.style.overflow = 'hidden';
   dialog.style.textAlign = 'center';
   dialog.style.transform = 'scale(0.9)';
   dialog.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
@@ -3926,12 +4623,18 @@ function showDeleteConfirmation(itemPath, itemIndex) {
   title.style.fontSize = '17px';
   title.style.margin = '0 0 10px 0';
   
+  const fullName = basename(itemPath);
+  const shownName = formatFilenameForDialog(itemPath, 48);
   const desc = document.createElement('p');
-  desc.textContent = `This will move "${itemPath.split('/').pop()}" to the system Trash.`;
+  desc.className = 'dialog-body-text';
+  desc.textContent = `This will move “${shownName}” to the system Trash.`;
+  if (fullName !== shownName) desc.title = fullName;
   desc.style.color = 'rgba(255,255,255,0.6)';
   desc.style.fontSize = '13px';
   desc.style.lineHeight = '1.5';
   desc.style.margin = '0 0 20px 0';
+  desc.style.overflowWrap = 'anywhere';
+  desc.style.wordBreak = 'break-word';
   
   const actions = document.createElement('div');
   actions.style.display = 'flex';
@@ -3979,7 +4682,7 @@ function showDeleteConfirmation(itemPath, itemIndex) {
       items = items.filter(it => it.path !== itemPath);
       
       if (items.length === 0) {
-        welcome.classList.remove('hidden');
+        showHomeHub();
         sidebar.style.display = viewer.style.display = catalogGrid.style.display = 'none';
       } else {
         if (idx >= items.length) idx = items.length - 1;
@@ -4013,19 +4716,14 @@ function showDeleteConfirmation(itemPath, itemIndex) {
 function toggleCatalogView(active) {
   catalogModeActive = active;
   if (active) {
-    catalogGrid.style.display = 'grid';
-    sidebar.style.display = 'none';
-    viewer.style.display = 'none';
     welcome.classList.add('hidden');
     buildCatalogContent();
     showToast('Catalog Grid Mode');
   } else {
-    catalogGrid.style.display = 'none';
-    sidebar.style.display = 'flex';
-    viewer.style.display = 'block';
     buildFilmstrip();
     show(idx);
   }
+  updateWorkspaceLayout();
 }
 
 function renderCatalogChunk(startIndex, count) {
@@ -4046,7 +4744,19 @@ function renderCatalogChunk(startIndex, count) {
       const color = duplicateGroupsCache.get(it.path);
       card.style.borderColor = color;
       card.style.boxShadow = `0 0 0 3px ${color}`;
+      card.classList.add('is-duplicate');
+      if (duplicateKeeperPaths.has(it.path)) {
+        card.classList.add('is-dup-keeper');
+        card.dataset.dupRole = 'keeper';
+      } else {
+        card.dataset.dupRole = 'alt';
+      }
     }
+
+    const attr = mediaAttributesCache.get(it.path);
+    if (attr?.favorite) card.classList.add('is-favorite');
+    if ((attr?.rating || 0) > 0) card.classList.add('is-rated');
+    if (i === idx) card.classList.add('is-focused');
     
     if (activeTagFilter !== null) {
       const tags = folderTagsCache.get(it.path) || [];
@@ -4109,7 +4819,15 @@ function renderCatalogChunk(startIndex, count) {
     } else {
       const img = document.createElement('img');
       img.crossOrigin = "anonymous";
-      img.onload = () => img.classList.add('loaded');
+      card.classList.add('is-loading');
+      img.onload = () => {
+        img.classList.add('loaded');
+        card.classList.remove('is-loading');
+      };
+      img.onerror = () => {
+        card.classList.remove('is-loading');
+        card.classList.add('is-failed');
+      };
       card.appendChild(img);
       
       invoke('get_thumbnail', { path: it.path, maxSide: 320 })
@@ -4136,13 +4854,11 @@ function renderCatalogChunk(startIndex, count) {
     title.textContent = it.path.split('/').pop();
     
     info.appendChild(title);
-    const attr = mediaAttributesCache.get(it.path);
-    if (attr?.favorite || attr?.rating) {
-      const meta = document.createElement('div');
-      meta.style.cssText = 'font-size:10px;color:var(--accent-gold);margin-top:3px;';
-      meta.textContent = `${attr.favorite ? '★ Favorite ' : ''}${attr.rating ? `Rating ${attr.rating}/5` : ''}`.trim();
-      info.appendChild(meta);
-    }
+    const ratingRow = document.createElement('div');
+    ratingRow.className = 'catalog-card-rating';
+    const r = attr?.rating || 0;
+    if (r > 0) ratingRow.textContent = '★'.repeat(r);
+    info.appendChild(ratingRow);
     card.appendChild(info);
     fragment.appendChild(card);
   }
@@ -4191,11 +4907,18 @@ async function buildCatalogContent() {
     catalogObserver = null;
   }
   catalogContent.innerHTML = '';
-  if (!items || items.length === 0) return;
+  if (!items || items.length === 0) {
+    renderEmptyState(catalogStateHost, {
+      preset: 'catalog-empty',
+      actions: openedLibraryPath
+        ? [{ label: 'Open another folder', primary: true, onClick: () => openFolder() }]
+        : [{ label: 'Go home', primary: true, onClick: () => goHome() }],
+    });
+    return;
+  }
+  clearEmptyState(catalogStateHost);
   await loadMediaAttributes();
-  
   catalogTitle.textContent = '';
-  
   renderCatalogChunk(0, 100);
 }
 
@@ -4349,6 +5072,7 @@ function matchesSmartFilter(item) {
   if (activeSmartFilter === 'rated') return (attr.rating || 0) >= 3;
   if (activeSmartFilter === 'gps') return !!(item.exif?.latitude && item.exif?.longitude);
   if (activeSmartFilter === 'raw') return ['raw', 'cr2', 'nef', 'arw', 'dng', 'heic', 'heif', 'tiff', 'tif'].some(ext => format.includes(ext));
+  if (activeSmartFilter === 'videos') return !!item.is_video;
   return true;
 }
 
@@ -4624,8 +5348,7 @@ listen('fs-change', async () => {
     sortItems();
     
     if (items.length === 0) {
-      welcome.classList.remove('hidden');
-      sidebar.style.display = viewer.style.display = 'none';
+      if (!openedLibraryPath) updateWorkspaceLayout();
       return;
     }
     
@@ -4661,47 +5384,74 @@ listen('fs-change', async () => {
   }
 });
 
-// Frosted MapKit GPS Modal Functions
-function showMapPopup(geodata) {
-  // Can be called with either a single {lat, lon} object/args or an array of objects
-  const data = Array.isArray(geodata) ? geodata : (typeof geodata === 'object' ? [geodata] : [{lat: arguments[0], lon: arguments[1]}]);
-  if (!data || data.length === 0) return;
+function playFavoriteBurst(anchorEl) {
+  if (!anchorEl || reducedMotionEnabled) return;
+  const rect = anchorEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const layer = document.createElement('div');
+  layer.className = 'heart-burst-layer';
+  const count = 10;
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('span');
+    p.className = 'heart-particle';
+    p.textContent = '♥';
+    const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    const dist = 28 + Math.random() * 22;
+    p.style.setProperty('--tx', `${Math.cos(angle) * dist}px`);
+    p.style.setProperty('--ty', `${Math.sin(angle) * dist}px`);
+    p.style.setProperty('--rot', `${(Math.random() - 0.5) * 40}deg`);
+    p.style.animationDelay = `${i * 25}ms`;
+    layer.appendChild(p);
+  }
+  const pulse = document.createElement('span');
+  pulse.className = 'heart-pulse-ring';
+  layer.appendChild(pulse);
+  layer.style.left = `${cx}px`;
+  layer.style.top = `${cy}px`;
+  document.body.appendChild(layer);
+  anchorEl.classList.add('favorite-pop');
+  setTimeout(() => anchorEl.classList.remove('favorite-pop'), 420);
+  setTimeout(() => layer.remove(), 900);
+}
 
+function buildMapSrcdoc(data) {
   const markersJson = JSON.stringify(data);
   const centerLat = data[0].lat;
   const centerLon = data[0].lon;
-  
-  const srcdoc = `
+  const initialZoom = data.length > 1 ? 11 : 14;
+  return `
     <!DOCTYPE html>
     <html>
     <head>
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <style>
-        body { margin: 0; padding: 0; background: #0c0c0e; }
-        #map { width: 100vw; height: 100vh; }
+        html, body { margin: 0; padding: 0; height: 100%; background: #111113; }
+        #map { width: 100%; height: 100%; }
+        .leaflet-popup-content-wrapper.folio-map-popup,
         .leaflet-popup-content-wrapper { 
-          background: rgba(18, 18, 20, 0.85); 
-          color: #fff; 
-          backdrop-filter: blur(20px) saturate(180%); 
-          -webkit-backdrop-filter: blur(20px) saturate(180%); 
-          border: 1px solid rgba(255,255,255,0.08); 
-          border-radius: 12px; 
-          box-shadow: 0 8px 32px 0 rgba(0,0,0,0.3);
+          background: #1b1b1f; 
+          color: #f5f5f2; 
+          border: 1px solid rgba(212,167,44,0.25); 
+          border-radius: 10px; 
+          box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+          max-width: 168px !important;
         }
-        .leaflet-popup-tip { background: rgba(18, 18, 20, 0.85); border: 1px solid rgba(255,255,255,0.08); }
-        .leaflet-popup-content { margin: 12px; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        .popup-img { width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: transform 0.2s ease; }
-        .popup-img:hover { transform: scale(1.02); }
-        .popup-title { font-size: 13px; font-weight: 600; color: #ffffff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px; }
-        .popup-address { font-size: 11px; color: #b0b0b8; line-height: 1.4; margin-top: 4px; margin-bottom: 4px; display: flex; align-items: flex-start; gap: 4px; }
-        .popup-coords { font-size: 9px; color: rgba(255,255,255,0.4); font-family: monospace; margin-top: 2px; }
+        .leaflet-popup-tip { background: #1b1b1f; border: 1px solid rgba(212,167,44,0.2); }
+        .leaflet-popup-content { margin: 8px; width: 148px !important; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+        .popup-img { width: 100%; height: 52px; object-fit: cover; border-radius: 6px; margin-bottom: 6px; cursor: pointer; display: block; }
+        .popup-title { font-size: 11px; font-weight: 600; color: #f5f5f2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 2px; }
+        .popup-address { font-size: 10px; color: #a8a8b0; line-height: 1.35; margin: 0 0 4px; display: block; }
+        .popup-coords { font-size: 9px; color: rgba(212,167,44,0.85); font-family: ui-monospace, monospace; }
+        .leaflet-control-attribution { font-size: 9px; background: rgba(17,17,19,0.85) !important; color: #888 !important; }
+        .leaflet-control-attribution a { color: #aaa !important; }
       </style>
     </head>
     <body>
       <div id="map"></div>
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <script>
-        const map = L.map('map', { zoomControl: false }).setView([${centerLat}, ${centerLon}], 13);
+        const map = L.map('map', { zoomControl: false }).setView([${centerLat}, ${centerLon}], ${initialZoom});
         L.control.zoom({ position: 'bottomright' }).addTo(map);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
@@ -4715,14 +5465,18 @@ function showMapPopup(geodata) {
         markers.forEach(m => {
           bounds.extend([m.lat, m.lon]);
           const popupContent = 
-            \`<div style="width:180px;">
-              \${m.path ? \`<img src="folio://localhost/\${encodeURIComponent(m.path)}" class="popup-img" onclick="window.parent.openGeotaggedImage('\${m.path.replace(/'/g, "\\\\'")}')" />\` : ''}
+            \`<div class="folio-popup-inner">
+              \${m.path ? \`<img src="folio://localhost/\${encodeURIComponent(m.path)}" class="popup-img" alt="" onclick="window.parent.openGeotaggedImage('\${m.path.replace(/'/g, "\\\\'")}')" />\` : ''}
               <div class="popup-title">\${m.name || 'Location'}</div>
-              <div class="popup-address" id="addr-\${m.lat}-\${m.lon}">Loading address...</div>
-              <div class="popup-coords">\${m.lat.toFixed(5)}, \${m.lon.toFixed(5)}</div>
+              <div class="popup-address" id="addr-\${m.lat}-\${m.lon}">Loading address…</div>
+              <div class="popup-coords">\${m.lat.toFixed(4)}, \${m.lon.toFixed(4)}</div>
             </div>\`;
             
-          L.marker([m.lat, m.lon]).addTo(map).bindPopup(popupContent);
+          const marker = L.marker([m.lat, m.lon]).addTo(map);
+          marker.bindPopup(popupContent, { maxWidth: 168, minWidth: 120, className: 'folio-map-popup' });
+          if (markers.length === 1) {
+            setTimeout(() => marker.openPopup(), 200);
+          }
         });
         
         map.on('popupopen', async function(e) {
@@ -4730,10 +5484,18 @@ function showMapPopup(geodata) {
           const container = popup.getElement();
           if (!container) return;
           const addressEl = container.querySelector('.popup-address');
-          if (addressEl && addressEl.textContent === 'Loading address...') {
-            const latLng = popup.getLatLng();
-            const address = await window.parent.reverseGeocode(latLng.lat, latLng.lng);
-            addressEl.textContent = address;
+          if (!addressEl) return;
+          const latLng = popup.getLatLng();
+          const pending = addressEl.textContent;
+          if (pending === 'Loading address…' || pending === '…' || pending === 'Loading address...') {
+            addressEl.textContent = 'Loading address…';
+            try {
+              const lookup = window.parent.reverseGeocodeForMap || window.parent.reverseGeocode;
+              const address = await lookup(latLng.lat, latLng.lng);
+              addressEl.textContent = address;
+            } catch (err) {
+              addressEl.textContent = 'Address unavailable';
+            }
           }
         });
 
@@ -4744,15 +5506,68 @@ function showMapPopup(geodata) {
     </body>
     </html>
   `;
-  mapIframe.srcdoc = srcdoc;
-  mapModal.style.display = 'flex';
 }
 
-mapCloseBtn.onclick = () => {
-  mapModal.style.display = 'none';
-  mapIframe.srcdoc = '';
-  mapIframe.src = '';
-};
+function positionGpsPopover(anchor, wide = false) {
+  if (!gpsPopover || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const w = wide ? 380 : 320;
+  const h = wide ? 300 : 280;
+  let left = rect.left;
+  let top = rect.bottom + 10;
+  if (left + w > window.innerWidth - 16) left = window.innerWidth - w - 16;
+  if (left < 12) left = 12;
+  if (top + h > window.innerHeight - 16) top = Math.max(12, rect.top - h - 10);
+  const originX = rect.left + rect.width / 2 - left;
+  const originY = rect.top + rect.height / 2 - top;
+  gpsPopover.style.width = `${w}px`;
+  gpsPopover.style.height = `${h}px`;
+  gpsPopover.style.left = `${left}px`;
+  gpsPopover.style.top = `${top}px`;
+  gpsPopover.style.transformOrigin = `${originX}px ${originY}px`;
+}
+
+function toggleGpsPopover(anchor, geodata) {
+  if (!gpsPopover || !gpsPopoverIframe || !anchor) return;
+  const data = Array.isArray(geodata) ? geodata : (geodata ? [geodata] : []);
+  if (!data.length) return;
+
+  if (gpsPopover.classList.contains('open') && gpsPopoverAnchor === anchor) {
+    closeGpsPopover();
+    return;
+  }
+
+  gpsPopoverAnchor = anchor;
+  gpsPopoverIframe.srcdoc = buildMapSrcdoc(data);
+  positionGpsPopover(anchor, data.length > 1);
+  gpsPopover.classList.add('open');
+  gpsPopover.setAttribute('aria-hidden', 'false');
+}
+
+function closeGpsPopover() {
+  if (!gpsPopover) return;
+  gpsPopover.classList.remove('open');
+  gpsPopover.setAttribute('aria-hidden', 'true');
+  gpsPopoverAnchor = null;
+  if (gpsPopoverIframe) {
+    gpsPopoverIframe.srcdoc = '';
+    gpsPopoverIframe.src = '';
+  }
+}
+
+function showMapPopup(geodata, anchor) {
+  toggleGpsPopover(anchor || gpsChip, geodata);
+}
+
+document.addEventListener('click', (e) => {
+  if (!gpsPopover?.classList.contains('open')) return;
+  if (e.target.closest('#gpsPopover') || e.target.closest('.gps-chip') || e.target.closest('#catalogMapBtn')) return;
+  closeGpsPopover();
+}, true);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeGpsPopover();
+});
 
 // Before/After Compare Slider Functions
 let compareBarCleanup = null;
@@ -4845,14 +5660,14 @@ compareBtn?.addEventListener('click', () => {
 function updateTranscodeHud() {
   const count = selectedCatalogPaths.size;
   if (count > 0) {
-    if (transcodeCount) transcodeCount.textContent = `${count} item${count !== 1 ? 's' : ''} selected`;
-    if (transcodeHud) transcodeHud.classList.add('visible');
+    if (batchCount) batchCount.textContent = `${count} item${count !== 1 ? 's' : ''}`;
+    batchBar?.classList.add('visible');
   } else {
-    if (transcodeHud) transcodeHud.classList.remove('visible');
+    batchBar?.classList.remove('visible');
   }
 }
 
-transcodeClose?.addEventListener('click', () => {
+batchClose?.addEventListener('click', () => {
   selectedCatalogPaths.clear();
   buildCatalogContent();
   updateTranscodeHud();
@@ -4860,8 +5675,13 @@ transcodeClose?.addEventListener('click', () => {
 
 async function runTrackedBatch(operation, label) {
   const started = await invoke('start_batch_job', { operation });
+  const jobId = started?.job_id || `job-${Date.now()}`;
+  setInspectorTab('jobs');
+  setInspectorVisible(true);
+  upsertBatchJobRow(jobId, label, { state: 'running', completed: 0, total: started?.total || 0 });
   showToast(`${label} started...`);
   const finalStatus = await trackJob(invoke, started, status => {
+    upsertBatchJobRow(jobId, label, status);
     if (status.completed === status.total || status.completed % 5 === 0) {
       FolioEvents.emit('job:update', status);
     }
@@ -4871,7 +5691,7 @@ async function runTrackedBatch(operation, label) {
   return finalStatus;
 }
 
-document.querySelectorAll('.transcode-btn[data-fmt]').forEach(btn => {
+document.querySelectorAll('.batch-chip[data-fmt]').forEach(btn => {
   btn.addEventListener('click', async () => {
     const fmt = btn.dataset.fmt;
     const count = selectedCatalogPaths.size;

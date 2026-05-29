@@ -4,6 +4,7 @@
   "scripts": {
     "install-deps": "cd frontend && npm install",
     "dev": "npm run install-deps && npx @tauri-apps/cli dev",
-    "build": "npm run install-deps && npx @tauri-apps/cli build"
+    "build": "npm run install-deps && npx @tauri-apps/cli build",
+    "build:macos-release": "bash scripts/build-macos-release.sh"
   }
 }

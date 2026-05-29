@@ -16,7 +16,7 @@ pub mod commands;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use library_core::{LibraryCache, LibraryIndex};
 use media_core::{SimpleEdit, is_video_path};
@@ -64,7 +64,11 @@ pub struct AppState {
     pub jobs: commands::jobs::JobRegistry,
     pub vault: commands::vault::VaultRuntime,
     pub decode_failures: parking_lot::Mutex<HashSet<String>>,
+    /// Paths whose thumbnail generation failed recently (avoid hot-loop retries).
+    pub thumb_failures: parking_lot::Mutex<HashSet<String>>,
     pub thumbnail_cache_limit_bytes: RwLock<u64>,
+    pub decoded_cache_limit_bytes: RwLock<u64>,
+    pub app_handle: parking_lot::RwLock<Option<tauri::AppHandle>>,
 }
 
 pub fn get_recents_path() -> std::path::PathBuf {
@@ -168,6 +172,19 @@ pub fn rebuild_canonical_roots(state: &AppState) {
     *state.canonical_roots.write() = new_roots;
 }
 
+struct PendingOpens(Mutex<Vec<PathBuf>>);
+
+#[tauri::command]
+fn drain_pending_open_paths(state: tauri::State<'_, PendingOpens>) -> Vec<String> {
+    state
+        .0
+        .lock()
+        .unwrap()
+        .drain(..)
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
+}
+
 fn main() {
     let cache = LibraryCache::open_default().expect("Failed to open cache");
     let app_state = Arc::new(AppState {
@@ -187,14 +204,18 @@ fn main() {
         jobs: commands::jobs::JobRegistry::default(),
         vault: commands::vault::VaultRuntime::new(),
         decode_failures: parking_lot::Mutex::new(HashSet::new()),
+        thumb_failures: parking_lot::Mutex::new(HashSet::new()),
         thumbnail_cache_limit_bytes: RwLock::new(2 * 1024 * 1024 * 1024),
+        decoded_cache_limit_bytes: RwLock::new(4 * 1024 * 1024 * 1024),
+        app_handle: parking_lot::RwLock::new(None),
     });
 
     rebuild_canonical_roots(&app_state);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(app_state.clone());
+        .manage(app_state.clone())
+        .manage(PendingOpens(Mutex::new(Vec::new())));
 
     #[cfg(target_os = "macos")]
     {
@@ -277,11 +298,13 @@ fn main() {
                     }
                 });
 
-            if is_video && file_len > 0 {
+            const STREAM_CHUNK: u64 = 1024 * 1024;
+
+            if file_len > 0 {
                 if let Some(ref range_val) = range_header {
                     if let Some((start, end)) = parse_range(range_val, file_len) {
                         let length = end - start + 1;
-                        let chunk_size = length.min(1 * 1024 * 1024); // 1MB chunks to curb memory footprint spikes
+                        let chunk_size = length.min(STREAM_CHUNK);
 
                         let file = match std::fs::File::open(&path) {
                             Ok(f) => f,
@@ -293,7 +316,6 @@ fn main() {
                             }
                         };
 
-                        // Seek and read safely without unsafe memory mapping
                         use std::io::{Read, Seek, SeekFrom};
                         let mut file = file;
                         let _ = file.seek(SeekFrom::Start(start));
@@ -309,7 +331,7 @@ fn main() {
                                 format!(
                                     "bytes {}-{}/{}",
                                     start,
-                                    start + bytes_read as u64 - 1,
+                                    start.saturating_add(bytes_read as u64).saturating_sub(1),
                                     file_len
                                 ),
                             )
@@ -360,6 +382,10 @@ fn main() {
         .setup(|app| {
             use tauri::Emitter;
             use tauri::Manager;
+
+            if let Some(state) = app.try_state::<std::sync::Arc<AppState>>() {
+                *state.app_handle.write() = Some(app.handle().clone());
+            }
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
@@ -423,11 +449,15 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::catalog::open_folder_picker,
             commands::catalog::open_specific_folder,
+            commands::catalog::open_media_at_path,
+            drain_pending_open_paths,
             commands::catalog::get_folder_items,
+            commands::catalog::refresh_active_library,
             commands::catalog::create_physical_folder,
             commands::catalog::delete_physical_file,
             commands::recent::get_recent_folders,
             commands::recent::add_recent_folder,
+            commands::recent::clear_recent_folders,
             commands::media::set_window_vibrancy,
             commands::media::trigger_macos_sound,
             commands::media::get_thumbnail,
@@ -440,6 +470,7 @@ fn main() {
             commands::media::find_visual_duplicates,
             commands::media::batch_transcode,
             commands::media::prefetch_media,
+            commands::media::prefetch_decoded_media,
             commands::media::get_visual_histogram,
             commands::metadata::update_exif_metadata,
             commands::metadata::add_tag_to_image,
@@ -472,10 +503,22 @@ fn main() {
             commands::vault::vault_lock,
             commands::vault::vault_add_files,
             commands::vault::vault_export_files,
+            commands::vault::vault_set_auto_lock,
+            commands::vault::vault_repair_catalog,
+            commands::platform::macos_haptic_tick,
+            commands::platform::classify_image_path,
+            commands::platform::play_live_photo_native,
             commands::storage::get_storage_diagnostics,
             commands::storage::purge_cache,
+            commands::storage::clear_thumbnail_cache,
+            commands::storage::clear_decoded_cache,
+            commands::storage::clear_metadata_database,
+            commands::storage::reset_library_metadata,
+            commands::storage::clear_decode_failures,
             commands::storage::set_thumbnail_cache_limit,
+            commands::storage::set_decoded_cache_limit,
             commands::storage::prune_thumbnail_cache,
+            commands::storage::prune_decoded_cache,
             commands::secure::authenticate_vault,
             commands::secure::scrub_exif_metadata,
             commands::secure::audit_file_checksum,
@@ -483,7 +526,35 @@ fn main() {
             commands::secure::show_native_share_sheet,
             commands::secure::open_in_finder,
             commands::secure::submit_crash_report,
+            commands::macos::set_default_media_handler,
+            commands::macos::show_file_open_with_help,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Opened { urls } = event {
+                use tauri::Emitter;
+                use tauri::Manager;
+                let paths = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        commands::macos::paths_from_opened_urls(&urls)
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        urls.iter()
+                            .filter_map(|u| u.to_file_path().ok())
+                            .collect::<Vec<_>>()
+                    }
+                };
+                if !paths.is_empty() {
+                    if let Some(pending) = app.try_state::<PendingOpens>() {
+                        pending.0.lock().unwrap().extend(paths.clone());
+                    }
+                    if let Some(path) = paths.last() {
+                        let _ = app.emit("folio-open-path", path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        });
 }

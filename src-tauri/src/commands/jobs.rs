@@ -1,6 +1,7 @@
 use crate::AppState;
 use library_core::rusqlite;
 use parking_lot::RwLock;
+use tauri::Emitter;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -72,6 +73,15 @@ pub enum BatchOperation {
         ids: Vec<String>,
         destination: String,
     },
+}
+
+fn job_update(state: &Arc<AppState>, job_id: &str, update: impl FnOnce(&mut JobStatus)) {
+    state.jobs.update(job_id, update);
+    if let Some(status) = state.jobs.get(job_id) {
+        if let Some(app) = state.app_handle.read().clone() {
+            let _ = app.emit("job-update", status);
+        }
+    }
 }
 
 impl JobRegistry {
@@ -186,7 +196,7 @@ fn transcode_one(path: &Path, target: &str) -> Result<(), String> {
 }
 
 fn run_path_job<F>(
-    registry: JobRegistry,
+    _registry: JobRegistry,
     state: Arc<AppState>,
     job_id: String,
     cancel: Arc<AtomicBool>,
@@ -200,23 +210,26 @@ fn run_path_job<F>(
     record_history(&state, &operation, &payload);
     for path in paths {
         if cancel.load(Ordering::SeqCst) {
-            registry.update(&job_id, |s| s.state = "cancelled".to_string());
+            job_update(&state, &job_id, |s| s.state = "cancelled".to_string());
             return;
         }
         let p = PathBuf::from(&path);
-        let res = if crate::is_path_safe(&p, &state) {
+        let mut res = if crate::is_path_safe(&p, &state) {
             f(&path, &p, &state)
         } else {
             Err("outside safe sandbox boundaries".to_string())
         };
-        registry.update(&job_id, |s| {
+        if res.is_err() && !cancel.load(Ordering::SeqCst) {
+            res = f(&path, &p, &state);
+        }
+        job_update(&state, &job_id, |s| {
             s.completed += 1;
             if let Err(e) = res {
                 push_job_error(s, format!("{path}: {e}"));
             }
         });
     }
-    registry.update(&job_id, |s| {
+    job_update(&state, &job_id, |s| {
         if s.state == "running" {
             s.state = "completed".to_string();
         }
@@ -392,27 +405,55 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
         BatchOperation::ThumbnailWarmup { paths, max_side } => {
             let path_bufs = validate_paths(&paths, &state)?;
             std::thread::spawn(move || {
-                for (idx, p) in path_bufs.iter().enumerate() {
+                let total = path_bufs.len();
+                let parallel = library_core::LibraryCache::cache_parallelism();
+                for (chunk_idx, chunk) in path_bufs.chunks(parallel).enumerate() {
                     if cancel.load(Ordering::SeqCst) {
-                        registry.update(&thread_job_id, |s| s.state = "cancelled".to_string());
+                        job_update(&thread_state, &thread_job_id, |s| {
+                            s.state = "cancelled".to_string();
+                        });
                         return;
                     }
-                    let res = thread_state.cache.ensure_thumbnail(p, max_side);
-                    registry.update(&thread_job_id, |s| {
-                        s.completed = idx + 1;
-                        if let Err(e) = res {
-                            push_job_error(s, format!("{}: {e}", p.display()));
+                    for (i, p) in chunk.iter().enumerate() {
+                        let idx = chunk_idx * parallel + i;
+                        let path_key = p.to_string_lossy().to_string();
+                        let mut res = thread_state.cache.ensure_thumbnail(p, max_side);
+                        if res.is_err() {
+                            thread_state.thumb_failures.lock().remove(&path_key);
+                            res = thread_state.cache.ensure_thumbnail(p, max_side);
                         }
-                    });
+                        if let Err(ref e) = res {
+                            thread_state.thumb_failures.lock().insert(path_key);
+                            let msg = format!("{}: {e}", p.display());
+                            job_update(&thread_state, &thread_job_id, |s| {
+                                s.completed = idx + 1;
+                                push_job_error(s, msg);
+                            });
+                        } else {
+                            thread_state.thumb_failures.lock().remove(&path_key);
+                            job_update(&thread_state, &thread_job_id, |s| {
+                                s.completed = idx + 1;
+                            });
+                        }
+                    }
                 }
-                registry.update(&thread_job_id, |s| s.state = "completed".to_string());
+                let thumb_limit = *thread_state.thumbnail_cache_limit_bytes.read();
+                let _ = library_core::prune_dir_lru(thread_state.cache.thumb_dir(), thumb_limit);
+                let decode_limit = *thread_state.decoded_cache_limit_bytes.read();
+                thread_state.cache.prune_decoded_to_limit(decode_limit);
+                job_update(&thread_state, &thread_job_id, |s| {
+                    if s.completed < total {
+                        s.completed = total;
+                    }
+                    s.state = "completed".to_string();
+                });
             });
         }
         BatchOperation::VaultAdd { paths } => {
             validate_paths(&paths, &state)?;
             std::thread::spawn(move || {
                 let result = crate::commands::vault::vault_add_files_sync(paths, &thread_state);
-                registry.update(&thread_job_id, |s| {
+                job_update(&thread_state, &thread_job_id, |s| {
                     s.completed = result.success + result.failed;
                     s.failed = result.failed;
                     s.errors = result.errors;
@@ -427,7 +468,7 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
                     destination,
                     &thread_state,
                 );
-                registry.update(&thread_job_id, |s| {
+                job_update(&thread_state, &thread_job_id, |s| {
                     s.completed = result.success + result.failed;
                     s.failed = result.failed;
                     s.errors = result.errors;

@@ -229,30 +229,14 @@ pub async fn show_native_share_sheet(
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        // Escape double-quotes and backslashes in path string for AppleScript safety
-        let path_str = p
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let script = format!(
-            r#"tell application "Finder" to reveal POSIX file "{}"
-               tell application "System Events"
-                   tell process "Finder"
-                       click menu item "Share" of menu "File" of menu bar 1
-                   end tell
-               end tell"#,
-            path_str
-        );
-
-        let output = Command::new("osascript").arg("-e").arg(&script).output();
-
-        match output {
-            Ok(out) if out.status.success() => Ok(()),
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                Err(format!("Sharing sheet failed to trigger: {}", stderr))
-            }
-            Err(e) => Err(format!("Sharing controller error: {}", e)),
+        #[cfg(target_os = "macos")]
+        {
+            crate::commands::macos_bridge::share_file(&p)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = p;
+            Err("Native share sheet is only supported on macOS".to_string())
         }
     })
     .await

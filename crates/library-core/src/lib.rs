@@ -5,7 +5,8 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
 use media_core::{
-    ImageMetadata, decode_image, is_video_path, read_metadata, scan_supported_images,
+    ImageMetadata, decode_image, is_video_path, read_metadata_for_index,
+    scan_supported_images,
 };
 use r2d2::{Pool, PooledConnection};
 use rayon::prelude::*;
@@ -135,7 +136,7 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
                 let metadata = match cache.cached_metadata(path) {
                     Ok(Some(metadata)) => Some(metadata),
                     _ => {
-                        match read_metadata(path) {
+                        match read_metadata_for_index(path) {
                             Ok(metadata) => {
                                 let _ = cache.upsert_metadata(path, &metadata);
                                 Some(metadata)
@@ -163,6 +164,11 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
             })
             .collect()
     });
+
+    cache.schedule_flush();
+    if let Ok(conn) = cache.conn() {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(20);");
+    }
 
     Ok(LibraryIndex {
         root: root.to_path_buf(),
@@ -956,15 +962,101 @@ impl LibraryCache {
         Ok(cached)
     }
 
+    /// CPU-aware parallelism for thumbnail/decode warmup (2–8 workers).
+    pub fn cache_parallelism() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 8)
+    }
+
     pub fn warm_thumbnails(&self, paths: &[PathBuf], active_index: usize, max_side: u32) {
+        const WARM_LIMIT: usize = 48;
+        let parallel = Self::cache_parallelism();
         let mut indexed_paths: Vec<(usize, &PathBuf)> = paths.iter().enumerate().collect();
         indexed_paths
             .sort_by_key(|&(orig_idx, _)| (orig_idx as isize - active_index as isize).abs());
-        indexed_paths.truncate(30);
-        indexed_paths.par_iter().for_each(|&(_, path)| {
-            let _ = self.ensure_thumbnail(path, max_side);
-        });
+        indexed_paths.truncate(WARM_LIMIT);
+        for chunk in indexed_paths.chunks(parallel) {
+            chunk.par_iter().for_each(|&(_, path)| {
+                let _ = self.ensure_thumbnail(path, max_side);
+            });
+        }
     }
+
+    /// Parallel thumbnail warmup for job queue / large batches.
+    pub fn warm_thumbnails_batch(&self, paths: &[PathBuf], max_side: u32) {
+        let parallel = Self::cache_parallelism();
+        for chunk in paths.chunks(parallel) {
+            chunk.par_iter().for_each(|path| {
+                let _ = self.ensure_thumbnail(path, max_side);
+            });
+        }
+    }
+
+    /// Decode non-native stills into the decoded cache (RAW/TIFF/etc.).
+    pub fn warm_decoded(&self, paths: &[PathBuf]) {
+        let parallel = Self::cache_parallelism();
+        for chunk in paths.chunks(parallel) {
+            chunk.par_iter().for_each(|path| {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let native = matches!(
+                    ext.as_str(),
+                    "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
+                );
+                if !native {
+                    let _ = self.ensure_decoded(path);
+                }
+            });
+        }
+    }
+
+    /// Drop oldest decoded cache files until total size is under `limit_bytes`.
+    pub fn prune_decoded_to_limit(&self, limit_bytes: u64) -> u64 {
+        prune_dir_lru(&self.decoded_dir, limit_bytes)
+    }
+}
+
+/// LRU prune by file mtime (oldest removed first).
+pub fn prune_dir_lru(dir: &Path, limit_bytes: u64) -> u64 {
+    let mut entries = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.elapsed().ok())
+                    .map(|e| e.as_secs())
+                    .unwrap_or(u64::MAX);
+                entries.push((path, meta.len(), modified));
+            }
+        }
+    }
+    let mut total: u64 = entries.iter().map(|(_, size, _)| *size).sum();
+    if total <= limit_bytes {
+        return 0;
+    }
+    entries.sort_by_key(|(_, _, age)| std::cmp::Reverse(*age));
+    let mut removed = 0u64;
+    for (path, size, _) in entries {
+        if total <= limit_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+            removed += size;
+        }
+    }
+    removed
 }
 
 impl Drop for LibraryCache {

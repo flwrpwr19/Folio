@@ -356,6 +356,83 @@ pub fn get_video_dimensions_macos(path: &Path) -> Option<(u32, u32)> {
     }
 }
 
+/// Fast path for folder indexing: dimensions only, no full EXIF parse (large RAW folders).
+pub fn read_metadata_for_index(path: &Path) -> Result<ImageMetadata> {
+    if is_video_path(path) {
+        let (width, height) = {
+            #[cfg(target_os = "macos")]
+            {
+                get_video_dimensions_macos(path).unwrap_or((1920, 1080))
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                (1920, 1080)
+            }
+        };
+        return Ok(ImageMetadata {
+            width,
+            height,
+            orientation: 1,
+            format: None,
+            exif: None,
+            focus_score: None,
+        });
+    }
+
+    if !is_supported_image_path(path) {
+        return Err(MediaError::Unsupported(path.to_path_buf()).into());
+    }
+
+    let ext = path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+
+    let (width, height, format) = if image_crate_native(&ext) {
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("failed to open image file: {}", path.display()))?;
+        let reader = ImageReader::new(std::io::BufReader::new(file))
+            .with_guessed_format()
+            .with_context(|| format!("failed to guess format: {}", path.display()))?;
+        let fmt = reader.format();
+        let (w, h) = reader
+            .into_dimensions()
+            .with_context(|| format!("failed to read dimensions: {}", path.display()))?;
+        (w, h, fmt)
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            let (w, h) = sips_get_dimensions(path)?;
+            (w, h, None)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if ext == "tif" || ext == "tiff" {
+                let reader = ImageReader::open(path)
+                    .ok()
+                    .and_then(|r| r.with_guessed_format().ok());
+                let fmt = reader.as_ref().and_then(|r| r.format());
+                match reader.and_then(|r| r.into_dimensions().ok()) {
+                    Some((w, h)) => (w, h, fmt),
+                    None => anyhow::bail!("TIFF dimensions failed and sips unavailable"),
+                }
+            } else {
+                anyhow::bail!("RAW formats require sips (macOS only)")
+            }
+        }
+    };
+
+    Ok(ImageMetadata {
+        width,
+        height,
+        orientation: 1,
+        format,
+        exif: None,
+        focus_score: None,
+    })
+}
+
 pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
     if is_video_path(path) {
         let (width, height) = {

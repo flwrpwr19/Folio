@@ -11,9 +11,11 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 TOUCHID_HELPER_SRC="$ROOT_DIR/src-tauri/helpers/touchid_helper.swift"
 TOUCHID_HELPER_BIN="$ROOT_DIR/target/release/touchid_helper"
+MACOS_HELPER_SRC="$ROOT_DIR/src-tauri/helpers/folio_macos_helper.swift"
+MACOS_HELPER_BIN="$ROOT_DIR/target/release/folio_macos_helper"
 SWIFT_ARCH="$(uname -m)"
 SWIFT_TARGET="${SWIFT_ARCH}-apple-macosx14.0"
-APP_TARBALL="$ROOT_DIR/target/release/bundle/macos/Folio_1.4.0_${SWIFT_ARCH}.app.tar.gz"
+APP_TARBALL="$ROOT_DIR/target/release/bundle/macos/Folio_1.5.0_${SWIFT_ARCH}.app.tar.gz"
 
 cd "$ROOT_DIR"
 cargo build --release -p "$PACKAGE_NAME"
@@ -24,6 +26,16 @@ xcrun swiftc \
     -framework LocalAuthentication \
     -o "$TOUCHID_HELPER_BIN"
 
+xcrun swiftc \
+    -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+    -target "$SWIFT_TARGET" \
+    "$MACOS_HELPER_SRC" \
+    -framework AppKit \
+    -framework AVKit \
+    -framework Vision \
+    -framework CoreHaptics \
+    -o "$MACOS_HELPER_BIN"
+
 if [[ ! -d "$APP_BUNDLE_DIR" ]]; then
     mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
     cp "$ROOT_DIR/target/release/${BIN_NAME}" "$MACOS_DIR/${APP_NAME}"
@@ -32,6 +44,15 @@ fi
 cp "$TOUCHID_HELPER_BIN" "$MACOS_DIR/touchid_helper"
 chmod 755 "$MACOS_DIR/touchid_helper"
 test -x "$MACOS_DIR/touchid_helper"
+
+cp "$MACOS_HELPER_BIN" "$MACOS_DIR/folio_macos_helper"
+chmod 755 "$MACOS_DIR/folio_macos_helper"
+test -x "$MACOS_DIR/folio_macos_helper"
+
+ICON_ICNS="$ROOT_DIR/src-tauri/icons/icon.icns"
+if [[ -f "$ICON_ICNS" && -d "$RESOURCES_DIR" ]]; then
+  cp "$ICON_ICNS" "$RESOURCES_DIR/icon.icns"
+fi
 
 if [[ ! -f "$CONTENTS_DIR/Info.plist" ]]; then
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
@@ -44,7 +65,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundleExecutable</key>
     <string>Folio</string>
     <key>CFBundleIdentifier</key>
-    <string>com.local.folio</string>
+    <string>com.folio.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -52,7 +73,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>1.5.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>

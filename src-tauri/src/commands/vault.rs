@@ -320,6 +320,10 @@ pub fn vault_export_files_sync(
         result.push_error("Destination is outside safe roots or is not a folder".to_string());
         return result;
     }
+    if is_vault_path(&dest_dir) {
+        result.push_error("Cannot export vault items into the Secure Album storage folder".to_string());
+        return result;
+    }
     let key = match vault_key() {
         Ok(key) => key,
         Err(e) => {
@@ -413,6 +417,84 @@ pub async fn vault_unlock(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
 pub async fn vault_lock(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.vault.lock();
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct VaultRepairResult {
+    pub removed_rows: usize,
+    pub removed_files: usize,
+}
+
+#[tauri::command]
+pub async fn vault_set_auto_lock(minutes: u64, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    if !(1..=120).contains(&minutes) {
+        return Err("Auto-lock must be between 1 and 120 minutes".to_string());
+    }
+    *state.vault.auto_lock_minutes.write() = minutes;
+    if state.vault.is_unlocked() {
+        state.vault.set_unlocked();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn vault_repair_catalog(state: State<'_, Arc<AppState>>) -> Result<VaultRepairResult, String> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_vault_unlocked(&state_arc)?;
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut removed_rows = 0usize;
+        let mut removed_files = 0usize;
+
+        let mut stmt = conn
+            .prepare("SELECT id, encrypted_path FROM vault_items")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (id, encrypted_path) in rows {
+            if !Path::new(&encrypted_path).exists() {
+                conn.execute("DELETE FROM vault_items WHERE id = ?", rusqlite::params![id])
+                    .map_err(|e| e.to_string())?;
+                removed_rows += 1;
+            }
+        }
+
+        let known: std::collections::HashSet<String> = conn
+            .prepare("SELECT encrypted_path FROM vault_items")
+            .map_err(|e| e.to_string())?
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let vault_dir = default_vault_dir();
+        if vault_dir.exists() {
+            for entry in std::fs::read_dir(&vault_dir).map_err(|e| e.to_string())?.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let key = path.to_string_lossy().to_string();
+                if !known.contains(&key) && path.extension().and_then(|e| e.to_str()) == Some("folio-vault") {
+                    if std::fs::remove_file(&path).is_ok() {
+                        removed_files += 1;
+                    }
+                }
+            }
+        }
+
+        state_arc.cache.schedule_flush();
+        Ok(VaultRepairResult {
+            removed_rows,
+            removed_files,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

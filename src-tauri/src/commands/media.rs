@@ -139,6 +139,10 @@ pub async fn get_thumbnail(
         }
     }
 
+    if state.thumb_failures.lock().contains(&path) {
+        return Err("Previous thumbnail attempt failed for this file".to_string());
+    }
+
     let state_arc = state.inner().clone();
     let path_clone = path.clone();
     let thumb_path = tauri::async_runtime::spawn_blocking(move || {
@@ -146,7 +150,10 @@ pub async fn get_thumbnail(
         let thumb_path = state_arc
             .cache
             .ensure_thumbnail(&path_buf, max_side)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                state_arc.thumb_failures.lock().insert(path_clone.clone());
+                e.to_string()
+            })?;
         let thumb_str = thumb_path.to_string_lossy().to_string();
 
         state_arc
@@ -164,6 +171,7 @@ pub async fn get_thumbnail(
 #[tauri::command]
 pub async fn get_full_image(
     path: String,
+    force: Option<bool>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let p = PathBuf::from(&path);
@@ -171,9 +179,12 @@ pub async fn get_full_image(
         return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
     }
     let state_arc = state.inner().clone();
+    let force_retry = force.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let p = PathBuf::from(&path);
-        if state_arc.decode_failures.lock().contains(&path) {
+        if force_retry {
+            state_arc.decode_failures.lock().remove(&path);
+        } else if state_arc.decode_failures.lock().contains(&path) {
             return Err("Previous decode attempt failed for this file".to_string());
         }
         let cached = state_arc.cache.ensure_decoded(&p).map_err(|e| {
@@ -802,6 +813,48 @@ pub async fn prefetch_media(
         crate::commands::jobs::BatchOperation::ThumbnailWarmup { paths, max_side },
         state.inner().clone(),
     )
+}
+
+fn is_video_path(p: &std::path::Path) -> bool {
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "mp4" | "mov" | "m4v" | "avi" | "mkv" | "webm" | "mpg" | "mpeg" | "3gp"
+    )
+}
+
+/// Warms decoded JPEG cache for stills (RAW/TIFF/etc.) without blocking the UI.
+#[tauri::command]
+pub async fn prefetch_decoded_media(
+    paths: Vec<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let decode_paths: Vec<std::path::PathBuf> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let p = std::path::PathBuf::from(&path);
+                if !crate::is_path_safe(&p, &state_arc) || is_video_path(&p) {
+                    return None;
+                }
+                if state_arc.decode_failures.lock().contains(&path) {
+                    return None;
+                }
+                Some(p)
+            })
+            .collect();
+        state_arc.cache.warm_decoded(&decode_paths);
+        let limit = *state_arc.decoded_cache_limit_bytes.read();
+        state_arc.cache.prune_decoded_to_limit(limit);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn base64_encode(data: &[u8]) -> String {
