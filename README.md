@@ -29,32 +29,6 @@ Folio is a high-performance, macOS-native media viewer. It uses Tauri for its ar
 - **Smart Catalog Workflows**: Ratings, favorites, smart filters, saved smart albums, sidecar metadata export/import, and job-tracked batch operations.
 - **Release-Grade Packaging**: macOS releases bundle `touchid_helper` (vault biometrics) and `folio_macos_helper` (Share Sheet, Vision tags, haptics, Live Photo preview).
 
-## Building a release (macOS)
-
-Requires Xcode command-line tools and Python 3 with `dmgbuild` (`pip3 install "dmgbuild>=1.6.7"`). On macOS 26+, the release script also drives Finder briefly so the install background is written correctly.
-
-```bash
-npm run build:macos-release
-```
-
-Artifacts land under `target/release/bundle/macos/`:
-
-| File | Use |
-|------|-----|
-| `Folio-<arch>.dmg` | **Ship this** — branded drag-to-Applications installer |
-| `Folio_1.5.0_<arch>.app.tar.gz` | Optional archive |
-| `folio.app` | Raw bundle (install by copy) |
-
-Do **not** ship anything under `bundle/dmg/` (legacy Tauri auto-DMGs with the wrong layout and lowercase volume name).
-
-See [RELEASE_NOTES.md](RELEASE_NOTES.md) for version history.
-
-## Limitations
-
-- **macOS-first** — Native helpers and vault features require macOS 14+.
-- **Not notarized** — First launch may require clearing quarantine (see below).
-- **No in-app auto-updater** — Install updates manually from GitHub Releases.
-
 ## Install (macOS)
 
 ### "App is damaged and can't be opened" (macOS)
