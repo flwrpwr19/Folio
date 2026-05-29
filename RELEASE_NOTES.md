@@ -1,15 +1,6 @@
-# Folio v1.5.1
+# Folio v1.3.0
 
-**Hotfix:** v1.5.0 macOS downloads shipped a stale app bundle (old UI). Use **v1.5.1** only.
-
-- Release pipeline now forces `target/` as `CARGO_TARGET_DIR` and verifies the embedded frontend hash before packaging.
-- Removed fallback that could package an outdated `folio.app` without running Tauri bundle.
-
----
-
-# Folio v1.5.0
-
-Folio v1.5.0 is a polish and performance release: branded macOS installer pipeline, unified viewer toolbar (including video), stronger cache/preload behavior, native macOS helpers, and vault/documentation hardening.
+Folio v1.3.0 adds the redesigned shell (onboarding, home hub, settings), a branded macOS installer, unified viewer toolbar with video controls, stronger cache/preload behavior, native macOS helpers, and vault hardening.
 
 ## Highlights
 
@@ -19,6 +10,7 @@ Folio v1.5.0 is a polish and performance release: branded macOS installer pipeli
 - Video controls integrated into the bottom toolbar; direction-aware preload for stills and videos; decoded cache limit with LRU prune.
 - macOS platform helpers: native Share Sheet, Vision tag suggestions, CoreHaptics zoom snap, Live Photo long-press AVPlayer preview.
 - Vault: export guard, catalog repair, configurable auto-lock; trash dialog truncates long filenames.
+- Viewer: sharper image transitions when navigating; settings stays full-screen when clearing cache from Settings.
 
 ## Verification
 
@@ -28,29 +20,19 @@ Folio v1.5.0 is a polish and performance release: branded macOS installer pipeli
 - `npm run build --prefix frontend`
 - `npm run build:macos-release` (branded DMG via `dmgbuild`, drag-to-Applications background)
 
-## Notes
+## Install (macOS)
 
-This release remains macOS-first and is not notarized. After installing from the DMG, run once:
+1. Download **Folio_1.3.0_arm64.dmg**, open it, drag Folio to Applications.
+2. Run once (Gatekeeper / quarantine):
 
 ```bash
 xattr -cr /Applications/Folio.app
 ```
 
-The in-app auto-updater remains disabled; install updates manually from GitHub Releases.
+This release is not notarized. Install updates manually from GitHub Releases.
 
 ---
 
-# Folio v1.4.0
+# Folio v1.2.0
 
-Folio v1.4.0 is a high-impact workflow and security release focused on protected media, batch operations, smarter catalog organization, and release packaging hardening.
-
-## Highlights
-
-- Added Secure Album Vault storage using AES-256-GCM encryption with macOS Keychain-backed key material when available.
-- Added Touch ID gated vault unlock, lock, import, and export command paths.
-- Added cancellable backend job tracking for long-running batch operations with progress polling.
-- Added ratings, favorites, smart filter presets, saved smart albums, and sidecar metadata export/import.
-- Added thumbnail cache quota controls, prune action, decode failure suppression, and navigation-aware prefetch.
-- Added Finder actions to breadcrumbs, recent folders, duplicate resolver cards, and batch selections.
-- Added richer watermark controls for opacity, scale, font size, and anchor.
-- Hardened macOS packaging so the bundled Touch ID helper is compiled and copied into the app bundle.
+See prior releases on GitHub for v1.2.0 and earlier notes.

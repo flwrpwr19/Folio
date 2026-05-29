@@ -1,6 +1,6 @@
 {
-  "version": "1.5.1",
-  "notes": "Secure Album Vault, smart catalog workflows, job-tracked batch operations, cache controls, Finder actions, and packaging hardening.",
-  "pub_date": "2026-05-29T12:00:00Z",
+  "version": "1.3.0",
+  "notes": "Redesigned shell, branded macOS installer, unified viewer toolbar, cache/preload improvements, native macOS helpers, and vault hardening.",
+  "pub_date": "2026-05-29T18:00:00Z",
   "platforms": {}
 }

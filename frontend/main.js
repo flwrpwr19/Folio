@@ -851,6 +851,10 @@ function setAppShellVisible(visible) {
   if (appShell) appShell.style.display = visible ? 'flex' : 'none';
 }
 
+function isSettingsOpen() {
+  return settingsPage && settingsPage.style.display !== 'none';
+}
+
 function showHomeHub(animate = false) {
   welcome?.classList.remove('hidden');
   if (welcome) welcome.style.display = '';
@@ -917,6 +921,7 @@ function setInspectorTab(tabId) {
 }
 
 function updateWorkspaceLayout() {
+  if (isSettingsOpen()) return;
   if (!items.length) {
     if (openedLibraryPath) {
       welcome?.classList.add('hidden');
@@ -2216,7 +2221,11 @@ function triggerPreload(currentIdx) {
   }
 
   for (const path of preloadCache.keys()) {
-    if (!keepSet.has(path)) preloadCache.delete(path);
+    if (!keepSet.has(path)) {
+      const img = preloadCache.get(path);
+      // Keep in-flight preloads so the next show() can use the full-res image.
+      if (img?.complete && img.naturalWidth > 0) preloadCache.delete(path);
+    }
   }
   for (const path of videoPreloadCache.keys()) {
     if (!keepSet.has(path)) evictVideoPreload(path);
@@ -2293,10 +2302,24 @@ function show(i, dir = null) {
     layer.appendChild(v);
     media.appendChild(layer);
   } else {
-    viewer.classList.add('loading'); const ts = preloadedThumbs.get(item.path);
-    if (ts) { const ph = document.createElement('img'); ph.crossOrigin = "anonymous"; ph.src = ts; ph.className = 'placeholder-thumb loaded'; layer.appendChild(ph); }
+    const cached = preloadCache.get(item.path);
+    const preloadReady = cached && cached.complete && cached.naturalWidth > 0;
+    viewer.classList.add('loading');
+    if (!preloadReady) {
+      const ts = preloadedThumbs.get(item.path);
+      if (ts) {
+        const ph = document.createElement('img');
+        ph.crossOrigin = 'anonymous';
+        ph.src = ts;
+        ph.className = 'placeholder-thumb';
+        ph.onload = () => ph.classList.add('loaded');
+        layer.appendChild(ph);
+      }
+    }
     const img = document.createElement('img'); img.crossOrigin = "anonymous"; img.alt = ''; img.className = 'media-content';
+    let revealToken = 0;
     const onImgReady = () => {
+        if (items[idx]?.path !== item.path) return;
         img.classList.add('loaded');
         img.style.opacity = '1';
         viewer.classList.remove('loading');
@@ -2304,7 +2327,7 @@ function show(i, dir = null) {
         if (ph) {
           ph.classList.remove('loaded');
           ph.classList.add('fade-out');
-          setTimeout(() => ph.remove(), 150);
+          setTimeout(() => ph.remove(), 200);
         }
         
         // Defer CPU-heavy color analytics to unblock visual navigation animations
@@ -2335,7 +2358,16 @@ function show(i, dir = null) {
           });
         }, 50);
     };
-    img.onload = onImgReady;
+    const revealViewerImage = async () => {
+      const token = ++revealToken;
+      try {
+        if (img.decode) await img.decode();
+      } catch (_) { /* decode can reject; still show if dimensions are valid */ }
+      if (token !== revealToken || items[idx]?.path !== item.path) return;
+      if (!img.naturalWidth) return;
+      onImgReady();
+    };
+    img.onload = () => { revealViewerImage(); };
     img.onerror = () => {
         viewer.classList.remove('loading');
         const ph = layer.querySelector('.placeholder-thumb');
@@ -2353,10 +2385,9 @@ function show(i, dir = null) {
         });
     };
 
-    const cached = preloadCache.get(item.path);
-    if (cached && cached.complete && cached.naturalWidth > 0) {
+    if (preloadReady) {
         img.src = cached.src;
-        onImgReady();
+        if (img.complete && img.naturalWidth > 0) revealViewerImage();
     } else {
         const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(item.path.split('.').pop().toLowerCase());
         if (isNative) {
@@ -2583,7 +2614,7 @@ async function updateAdaptiveGlow(el) {
 }
 
 /* ── Filmstrip ── */
-const THUMB_CONCURRENCY = 4; let thumbQueue = [], thumbActive = 0, thumbMaxSide = 320;
+const THUMB_CONCURRENCY = 4; let thumbQueue = [], thumbActive = 0, thumbMaxSide = 640;
 function enqueueThumb(el, p) { thumbQueue.push({ el, path: p, retries: 0 }); processThumbQueue(); }
 async function processThumbQueue() { while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length > 0) { const j = thumbQueue.shift(); thumbActive++; loadThumb(j).finally(() => { thumbActive--; processThumbQueue(); }); } }
 async function loadThumb({ el, path, retries }) {
@@ -4323,11 +4354,15 @@ async function reloadLibraryAfterCacheClear(cacheResult) {
         idx = Math.min(idx, Math.max(0, items.length - 1));
         clearEmptyState(catalogStateHost);
         clearEmptyState(viewerStateHost);
-        updateWorkspaceLayout();
-        if (catalogModeActive) buildCatalogContent();
-        else {
+        if (!isSettingsOpen()) {
+          updateWorkspaceLayout();
+          if (catalogModeActive) buildCatalogContent();
+          else {
+            buildFilmstrip();
+            show(idx);
+          }
+        } else if (!catalogModeActive) {
           buildFilmstrip();
-          show(idx);
         }
         Promise.all([renderTagFilters(), loadMediaAttributes()]).catch((e) => console.error(e));
       } else {
@@ -4338,11 +4373,15 @@ async function reloadLibraryAfterCacheClear(cacheResult) {
           idx = Math.min(idx, Math.max(0, items.length - 1));
           clearEmptyState(catalogStateHost);
           clearEmptyState(viewerStateHost);
-          updateWorkspaceLayout();
-          if (catalogModeActive) buildCatalogContent();
-          else {
+          if (!isSettingsOpen()) {
+            updateWorkspaceLayout();
+            if (catalogModeActive) buildCatalogContent();
+            else {
+              buildFilmstrip();
+              show(idx);
+            }
+          } else if (!catalogModeActive) {
             buildFilmstrip();
-            show(idx);
           }
           Promise.all([renderTagFilters(), loadMediaAttributes()]).catch((e) => console.error(e));
         } else {

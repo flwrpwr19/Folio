@@ -1,7 +1,7 @@
 {
   "name": "folio-frontend",
   "private": true,
-  "version": "1.5.1",
+  "version": "1.3.0",
   "type": "module",
   "scripts": {
     "dev": "lsof -ti:1420 | xargs kill -9 2>/dev/null; vite",
