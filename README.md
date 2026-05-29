@@ -27,61 +27,35 @@ Folio is a high-performance, macOS-native media viewer. It uses Tauri for its ar
 - **Window Vibrancy**: Optional macOS-native window transparency and background tinting.
 - **Secure Album Vault**: Touch ID-gated encrypted vault storage for sensitive media, backed by macOS Keychain key material where available.
 - **Smart Catalog Workflows**: Ratings, favorites, smart filters, saved smart albums, sidecar metadata export/import, and job-tracked batch operations.
-- **Release-Grade Packaging**: macOS packaging now validates and bundles the Touch ID helper required for biometric vault security.
+- **Release-Grade Packaging**: macOS releases bundle `touchid_helper` (vault biometrics) and `folio_macos_helper` (Share Sheet, Vision tags, haptics, Live Photo preview).
 
-## v1.4.0 Release Snapshot
+## Building a release (macOS)
 
-Folio v1.4.0 turned the viewer into a safer catalog workflow tool:
+Requires Xcode command-line tools and Python 3 with `dmgbuild` (`pip3 install "dmgbuild>=1.6.7"`). On macOS 26+, the release script also drives Finder briefly so the install background is written correctly.
 
-- Secure Album Vault with Touch ID unlock, auto-lock behavior, and protected command boundaries.
-- Cancellable backend jobs for transcode, EXIF scrub, vault import/export, thumbnail warmup, ratings, favorites, and trash.
-- Smarter catalog organization through favorites, 0-5 ratings, smart filters, saved smart albums, and metadata sidecars.
-- Better operational controls with thumbnail cache quotas, prune actions, decode failure caching, and navigation-aware prefetch.
-- More native macOS workflow affordances with Finder actions in breadcrumbs, recent folders, duplicate resolver cards, and batch selections.
+```bash
+npm run build:macos-release
+```
 
-## 🗺️ Roadmap & Upcoming Changes
+Artifacts land under `target/release/bundle/macos/`:
 
-We are actively engineering installation polish, a cleaner professional interface, deeper backend performance work, and cache reliability fixes. Here is what is currently planned after v1.4.0:
+| File | Use |
+|------|-----|
+| `Folio-<arch>.dmg` | **Ship this** — branded drag-to-Applications installer |
+| `Folio_1.5.0_<arch>.app.tar.gz` | Optional archive |
+| `folio.app` | Raw bundle (install by copy) |
 
-### 📦 Phase 1: Installer & First-Run Polish ✅
-* **Custom DMG Installer Window** ✅ — `scripts/create-release-dmg.sh` (create-dmg) with Folio icon + Applications drop link.
-* **DMG Background Design** ✅ — Branded background via `assets/brand/folio-readme-banner.png`.
-* **Release Asset Consistency** ✅ — `npm run build:macos-release` → package helpers → DMG → `scripts/verify-release-assets.sh`.
-* **First-Run Install Guidance** ✅ — README Gatekeeper / `xattr` steps below.
+Do **not** ship anything under `bundle/dmg/` (legacy Tauri auto-DMGs with the wrong layout and lowercase volume name).
 
-### 👋 Phase 1.5: In-App Onboarding ✅
-* **First-Launch Wizard** ✅ — Welcome, trust/Gatekeeper, open folder, permissions, UI tour, preferences.
-* **Calm Empty State** ✅ — Home hub and open-folder flow without decorative aurora.
-* **Show Again** ✅ — Settings → General can replay onboarding.
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for version history.
 
-### 🎨 Phase 2: Frontend/UI UX Redesign ✅
-* **Professional App Shell** ✅ — 3-pane shell, home hub, inspector, catalog grid, batch HUD, viewer toolbar.
-* **Settings Rework** ✅ — General, Appearance, Catalog, Cache, Export, Shortcuts, Security, Advanced.
-* **Catalog Workflow** ✅ — Smart filters, duplicates resolver, ratings/favorites, batch jobs panel.
-* **Accessibility** ✅ — Focus rings, reduced motion, high contrast (`modules/a11y.js`).
+## Limitations
 
-### 🚄 Phase 3: Backend Optimization & Cache Reliability ✅
-* **Fix Cache Clearing Behavior** ✅ — Active folder is re-indexed after purge/metadata clear; UI refreshes via `refresh_active_library` / `get_folder_items`.
-* **Cache Error Hardening** ✅ — Locked/missing cache files are skipped with warnings; partial clears complete successfully.
-* **Job Queue Refinement** ✅ — Jobs emit `job-update` events; per-path retry; thumbnail warmup uses failure cache + retry.
-* **Protocol Streaming Upgrade** ✅ — Range/chunked responses for video and ranged reads; large images buffer up to 64MB (no broken 416 gate).
-* **Database Maintenance** ✅ — WAL checkpoint + incremental vacuum after index builds and metadata clears.
-* **Thumbnail Pipeline Optimization** ✅ — Bounded parallel warmup, thumb/decode failure caches, navigation prefetch jobs.
+- **macOS-first** — Native helpers and vault features require macOS 14+.
+- **Not notarized** — First launch may require clearing quarantine (see below).
+- **No in-app auto-updater** — Install updates manually from GitHub Releases.
 
-### 🍏 Phase 4: Apple Hardware & Security Platform integrations ✅
-* **Live Photos AVPlayer** ✅ — Long-press a Live Photo opens native AVPlayer preview; hover still plays inline.
-* **CoreML Asset Auto-Taggers** ✅ — `classify_image_path` uses Vision on-device (`macos_haptic_tick` / helper).
-* **CoreHaptics Trackpad Snapping** ✅ — Haptic tick when zoom snaps back to fit (100%).
-* **Native Share Sheet Replacement** ✅ — `NSSharingServicePicker` via `folio_macos_helper` (no Finder AppleScript).
-* **Vault Hardening** ✅ — Block export into vault dir, repair catalog command, configurable auto-lock refresh.
-
-### ⚙️ Phase 5: Performance (partial ✅)
-* **Predictive Preload Queue** ✅ — Direction-aware still/video preload + 640px thumbs + RAW decode prefetch for ±1 neighbors.
-* **Decode / cache tuning** ✅ — CPU-aware parallelism (2–8 workers), decoded cache limit + LRU prune, parallel thumbnail jobs.
-* **libraw / Metal** — Not planned (diminishing returns vs. maintenance cost for this app).
-
-> **Note:** The auto-updater is currently on hold due to signature and certificate issues. Please download manual updates from the GitHub Releases page.
-
+## Install (macOS)
 
 ### "App is damaged and can't be opened" (macOS)
 Because Folio is a free, open-source app, it is not cryptographically "notarized" using a paid Apple Developer account ($99/year). Because of this, modern macOS Gatekeeper intentionally marks the downloaded app as "damaged" to force developers into their paid ecosystem, completely hiding the "Open Anyway" button.
