@@ -173,10 +173,13 @@ pub async fn get_full_image(
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let p = PathBuf::from(&path);
-        let cached = state_arc
-            .cache
-            .ensure_decoded(&p)
-            .map_err(|e| e.to_string())?;
+        if state_arc.decode_failures.lock().contains(&path) {
+            return Err("Previous decode attempt failed for this file".to_string());
+        }
+        let cached = state_arc.cache.ensure_decoded(&p).map_err(|e| {
+            state_arc.decode_failures.lock().insert(path.clone());
+            e.to_string()
+        })?;
         Ok::<String, String>(cached.to_string_lossy().to_string())
     })
     .await
@@ -210,6 +213,9 @@ pub async fn prepare_edit_preview(
             image::open(&temp_preview).map_err(|e| e.to_string())?
         } else {
             let source = {
+                if state_arc.decode_failures.lock().contains(&path) {
+                    return Err("Previous decode attempt failed for this file".to_string());
+                }
                 let ext = p
                     .extension()
                     .and_then(|e| e.to_str())
@@ -222,10 +228,10 @@ pub async fn prepare_edit_preview(
                 if native {
                     p.clone()
                 } else {
-                    state_arc
-                        .cache
-                        .ensure_decoded(&p)
-                        .map_err(|e| e.to_string())?
+                    state_arc.cache.ensure_decoded(&p).map_err(|e| {
+                        state_arc.decode_failures.lock().insert(path.clone());
+                        e.to_string()
+                    })?
                 }
             };
 
@@ -784,6 +790,18 @@ pub async fn batch_transcode(
         res.0,
         target_format.to_uppercase()
     ))
+}
+
+#[tauri::command]
+pub async fn prefetch_media(
+    paths: Vec<String>,
+    max_side: u32,
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::commands::jobs::JobStarted, String> {
+    crate::commands::jobs::start_job(
+        crate::commands::jobs::BatchOperation::ThumbnailWarmup { paths, max_side },
+        state.inner().clone(),
+    )
 }
 
 fn base64_encode(data: &[u8]) -> String {

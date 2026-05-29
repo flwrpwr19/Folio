@@ -3,6 +3,7 @@ use library_core::rusqlite;
 use media_core::SimpleEdit;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -18,6 +19,42 @@ pub struct AlbumInfo {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct MediaAttribute {
+    pub path: String,
+    pub rating: Option<u8>,
+    pub favorite: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct SmartFilter {
+    pub tags: Vec<String>,
+    pub rating_min: Option<u8>,
+    pub favorite: Option<bool>,
+    pub formats: Vec<String>,
+    pub has_gps: Option<bool>,
+    pub camera: Option<String>,
+    pub date_range: Option<(i64, i64)>,
+    pub size_range: Option<(u64, u64)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SmartAlbumInfo {
+    pub id: i64,
+    pub name: String,
+    pub filter: SmartFilter,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+struct SidecarItem {
+    path: String,
+    tags: Vec<TagInfo>,
+    rating: Option<u8>,
+    favorite: bool,
+    edit: SimpleEdit,
+    albums: Vec<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct BatchResult {
     pub success: usize,
     pub failed: usize,
@@ -25,7 +62,7 @@ pub struct BatchResult {
 }
 
 impl BatchResult {
-    fn push_error(&mut self, error: String) {
+    pub fn push_error(&mut self, error: String) {
         self.failed += 1;
         if self.errors.len() < 10 {
             self.errors.push(error);
@@ -39,6 +76,59 @@ fn ensure_safe_path(path: &str, state: &AppState) -> Result<PathBuf, String> {
         return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
     }
     Ok(p)
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn set_media_attribute_sync(
+    state: &AppState,
+    path: &str,
+    rating: Option<u8>,
+    favorite: Option<bool>,
+) -> Result<(), String> {
+    if let Some(r) = rating
+        && r > 5
+    {
+        return Err("Rating must be between 0 and 5".to_string());
+    }
+    let conn = state.cache.conn().map_err(|e| e.to_string())?;
+    let existing: Option<(Option<u8>, bool)> = conn
+        .query_row(
+            "SELECT rating, favorite FROM media_attributes WHERE path = ?",
+            rusqlite::params![path],
+            |row| {
+                Ok((
+                    row.get::<_, Option<u8>>(0)?,
+                    row.get::<_, i64>(1).map(|v| v != 0)?,
+                ))
+            },
+        )
+        .ok();
+    let next_rating = rating.or_else(|| existing.as_ref().and_then(|e| e.0));
+    let next_favorite = favorite.unwrap_or_else(|| existing.map(|e| e.1).unwrap_or(false));
+    conn.execute(
+        "INSERT INTO media_attributes (path, rating, favorite, updated_secs) VALUES (?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET rating = excluded.rating, favorite = excluded.favorite, updated_secs = excluded.updated_secs",
+        rusqlite::params![path, next_rating, i64::from(next_favorite), now_secs()],
+    )
+    .map_err(|e| e.to_string())?;
+    state.cache.schedule_flush();
+    Ok(())
+}
+
+fn record_batch_history(state: &AppState, operation: &str, payload: serde_json::Value) {
+    if let Ok(conn) = state.cache.conn() {
+        let _ = conn.execute(
+            "INSERT INTO batch_history (operation, payload_json, created_secs) VALUES (?, ?, ?)",
+            rusqlite::params![operation, payload.to_string(), now_secs()],
+        );
+        state.cache.schedule_flush();
+    }
 }
 
 #[tauri::command]
@@ -426,6 +516,261 @@ pub async fn batch_scrub_exif(
                 Err(e) => result.push_error(format!("{}: {}", p.display(), e)),
             }
         }
+        Ok::<BatchResult, String>(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_media_rating(
+    paths: Vec<String>,
+    rating: Option<u8>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<BatchResult, String> {
+    for path in &paths {
+        ensure_safe_path(path, &state)?;
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = BatchResult::default();
+        for path in &paths {
+            match set_media_attribute_sync(&state_arc, path, rating, None) {
+                Ok(()) => result.success += 1,
+                Err(e) => result.push_error(format!("{path}: {e}")),
+            }
+        }
+        record_batch_history(
+            &state_arc,
+            "set_rating",
+            serde_json::json!({ "paths": paths, "rating": rating }),
+        );
+        Ok::<BatchResult, String>(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_media_favorite(
+    paths: Vec<String>,
+    favorite: bool,
+    state: State<'_, Arc<AppState>>,
+) -> Result<BatchResult, String> {
+    for path in &paths {
+        ensure_safe_path(path, &state)?;
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = BatchResult::default();
+        for path in &paths {
+            match set_media_attribute_sync(&state_arc, path, None, Some(favorite)) {
+                Ok(()) => result.success += 1,
+                Err(e) => result.push_error(format!("{path}: {e}")),
+            }
+        }
+        record_batch_history(
+            &state_arc,
+            "set_favorite",
+            serde_json::json!({ "paths": paths, "favorite": favorite }),
+        );
+        Ok::<BatchResult, String>(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_media_attributes(
+    paths: Vec<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<MediaAttribute>, String> {
+    for path in &paths {
+        ensure_safe_path(path, &state)?;
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut attrs = Vec::with_capacity(paths.len());
+        for path in paths {
+            let row = conn
+                .query_row(
+                    "SELECT rating, favorite FROM media_attributes WHERE path = ?",
+                    rusqlite::params![path.clone()],
+                    |row| {
+                        Ok(MediaAttribute {
+                            path: path.clone(),
+                            rating: row.get(0)?,
+                            favorite: row.get::<_, i64>(1)? != 0,
+                        })
+                    },
+                )
+                .ok();
+            attrs.push(row.unwrap_or(MediaAttribute {
+                path,
+                rating: None,
+                favorite: false,
+            }));
+        }
+        Ok::<Vec<MediaAttribute>, String>(attrs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_smart_album(
+    name: String,
+    filter: SmartFilter,
+    state: State<'_, Arc<AppState>>,
+) -> Result<i64, String> {
+    if name.trim().is_empty() {
+        return Err("Smart album name cannot be empty".to_string());
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let filter_json = serde_json::to_string(&filter).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO smart_albums (name, filter_json, created_secs, updated_secs) VALUES (?, ?, ?, ?)
+             ON CONFLICT(name) DO UPDATE SET filter_json = excluded.filter_json, updated_secs = excluded.updated_secs",
+            rusqlite::params![name, filter_json, now_secs(), now_secs()],
+        )
+        .map_err(|e| e.to_string())?;
+        state_arc.cache.schedule_flush();
+        Ok::<i64, String>(conn.last_insert_rowid())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_smart_albums(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<SmartAlbumInfo>, String> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, filter_json FROM smart_albums ORDER BY name")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let filter_json: String = row.get(2)?;
+                let filter = serde_json::from_str(&filter_json).unwrap_or_default();
+                Ok(SmartAlbumInfo {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    filter,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut albums = Vec::new();
+        for row in rows {
+            albums.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok::<Vec<SmartAlbumInfo>, String>(albums)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_sidecar(
+    paths: Vec<String>,
+    destination: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<BatchResult, String> {
+    for path in &paths {
+        ensure_safe_path(path, &state)?;
+    }
+    let dest = PathBuf::from(&destination);
+    if let Some(parent) = dest.parent() {
+        if !crate::is_path_safe(&parent.to_path_buf(), &state) {
+            return Err("Destination lies outside safe sandbox boundaries".to_string());
+        }
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut result = BatchResult::default();
+        let mut sidecar = Vec::new();
+        for path in &paths {
+            let tags = {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT it.tag_name, COALESCE(t.color, '#D4A72C') FROM image_tags it LEFT JOIN tags t ON it.tag_name = t.name WHERE it.image_path = ?",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(rusqlite::params![path], |row| {
+                        Ok(TagInfo {
+                            name: row.get(0)?,
+                            color: row.get(1)?,
+                        })
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.filter_map(Result::ok).collect::<Vec<_>>()
+            };
+            let (rating, favorite) = conn
+                .query_row(
+                    "SELECT rating, favorite FROM media_attributes WHERE path = ?",
+                    rusqlite::params![path],
+                    |row| Ok((row.get::<_, Option<u8>>(0)?, row.get::<_, i64>(1)? != 0)),
+                )
+                .unwrap_or((None, false));
+            let edit = state_arc.edits.read().get(path).cloned().unwrap_or_default();
+            sidecar.push(SidecarItem {
+                path: path.clone(),
+                tags,
+                rating,
+                favorite,
+                edit,
+                albums: Vec::new(),
+            });
+            result.success += 1;
+        }
+        let json = serde_json::to_string_pretty(&sidecar).map_err(|e| e.to_string())?;
+        std::fs::write(&dest, json).map_err(|e| e.to_string())?;
+        Ok::<BatchResult, String>(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_sidecar(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<BatchResult, String> {
+    let sidecar_path = ensure_safe_path(&path, &state)?;
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let content = std::fs::read_to_string(&sidecar_path).map_err(|e| e.to_string())?;
+        let items: Vec<SidecarItem> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut result = BatchResult::default();
+        for item in items {
+            if !crate::is_path_safe(&PathBuf::from(&item.path), &state_arc) {
+                result.push_error(format!("{}: outside safe roots", item.path));
+                continue;
+            }
+            for tag in item.tags {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)",
+                    rusqlite::params![tag.name, tag.color],
+                );
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO image_tags (image_path, tag_name) VALUES (?, ?)",
+                    rusqlite::params![item.path, tag.name],
+                );
+            }
+            let _ =
+                set_media_attribute_sync(&state_arc, &item.path, item.rating, Some(item.favorite));
+            state_arc.edits.write().insert(item.path, item.edit);
+            result.success += 1;
+        }
+        state_arc.cache.schedule_flush();
         Ok::<BatchResult, String>(result)
     })
     .await

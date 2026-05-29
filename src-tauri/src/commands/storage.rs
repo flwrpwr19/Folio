@@ -12,6 +12,7 @@ pub struct StorageDiagnostics {
     pub decoded_size: u64,
     pub memory_used_kb: u64,
     pub cpu_used_pct: f64,
+    pub thumbnail_cache_limit_bytes: u64,
 }
 
 fn get_dir_size(path: &Path) -> u64 {
@@ -98,7 +99,68 @@ pub async fn get_storage_diagnostics(
             decoded_size,
             memory_used_kb,
             cpu_used_pct,
+            thumbnail_cache_limit_bytes: *state_arc.thumbnail_cache_limit_bytes.read(),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_thumbnail_cache_limit(
+    limit_gb: f64,
+    state: State<'_, std::sync::Arc<AppState>>,
+) -> Result<(), String> {
+    if !(0.25..=100.0).contains(&limit_gb) {
+        return Err("Thumbnail cache limit must be between 0.25 GB and 100 GB".to_string());
+    }
+    *state.thumbnail_cache_limit_bytes.write() = (limit_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn prune_thumbnail_cache(
+    state: State<'_, std::sync::Arc<AppState>>,
+) -> Result<u64, String> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let limit = *state_arc.thumbnail_cache_limit_bytes.read();
+        let dir = state_arc.cache.thumb_dir();
+        let mut entries = Vec::new();
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata() {
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .map(|e| e.as_secs())
+                        .unwrap_or(u64::MAX);
+                    entries.push((path, meta.len(), modified));
+                }
+            }
+        }
+        let mut total: u64 = entries.iter().map(|(_, size, _)| *size).sum();
+        if total <= limit {
+            return Ok(0);
+        }
+        entries.sort_by_key(|(_, _, age)| std::cmp::Reverse(*age));
+        let mut removed = 0;
+        for (path, size, _) in entries {
+            if total <= limit {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(size);
+                removed += size;
+            }
+        }
+        state_arc.resolved_thumbs.lock().clear();
+        Ok::<u64, String>(removed)
     })
     .await
     .map_err(|e| e.to_string())?

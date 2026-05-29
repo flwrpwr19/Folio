@@ -61,6 +61,10 @@ pub struct AppState {
     pub dominant_colors: parking_lot::Mutex<lru::LruCache<String, Vec<String>>>,
     /// Pre-computed canonical roots for fast sandbox checks
     pub canonical_roots: RwLock<HashSet<PathBuf>>,
+    pub jobs: commands::jobs::JobRegistry,
+    pub vault: commands::vault::VaultRuntime,
+    pub decode_failures: parking_lot::Mutex<HashSet<String>>,
+    pub thumbnail_cache_limit_bytes: RwLock<u64>,
 }
 
 pub fn get_recents_path() -> std::path::PathBuf {
@@ -124,6 +128,10 @@ pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
         return false;
     };
 
+    if commands::vault::is_vault_path(&canonical_path) {
+        return false;
+    }
+
     let roots = state.canonical_roots.read();
     for root in roots.iter() {
         if canonical_path.starts_with(root) {
@@ -176,6 +184,10 @@ fn main() {
             std::num::NonZeroUsize::new(10000).unwrap(),
         )),
         canonical_roots: RwLock::new(HashSet::new()),
+        jobs: commands::jobs::JobRegistry::default(),
+        vault: commands::vault::VaultRuntime::new(),
+        decode_failures: parking_lot::Mutex::new(HashSet::new()),
+        thumbnail_cache_limit_bytes: RwLock::new(2 * 1024 * 1024 * 1024),
     });
 
     rebuild_canonical_roots(&app_state);
@@ -309,7 +321,7 @@ fn main() {
                 }
             }
 
-            const MAX_BUFFERED_PROTOCOL_RESPONSE: u64 = 512 * 1024 * 1024;
+            const MAX_BUFFERED_PROTOCOL_RESPONSE: u64 = 64 * 1024 * 1024;
             if file_len > MAX_BUFFERED_PROTOCOL_RESPONSE {
                 return tauri::http::Response::builder()
                     .status(413)
@@ -427,6 +439,7 @@ fn main() {
             commands::media::get_folder_dominant_colors,
             commands::media::find_visual_duplicates,
             commands::media::batch_transcode,
+            commands::media::prefetch_media,
             commands::media::get_visual_histogram,
             commands::metadata::update_exif_metadata,
             commands::metadata::add_tag_to_image,
@@ -443,8 +456,26 @@ fn main() {
             commands::metadata::batch_add_tag,
             commands::metadata::batch_trash_files,
             commands::metadata::batch_scrub_exif,
+            commands::metadata::set_media_rating,
+            commands::metadata::set_media_favorite,
+            commands::metadata::get_media_attributes,
+            commands::metadata::save_smart_album,
+            commands::metadata::get_smart_albums,
+            commands::metadata::export_sidecar,
+            commands::metadata::import_sidecar,
+            commands::jobs::start_batch_job,
+            commands::jobs::get_job_status,
+            commands::jobs::cancel_job,
+            commands::vault::vault_status,
+            commands::vault::vault_create,
+            commands::vault::vault_unlock,
+            commands::vault::vault_lock,
+            commands::vault::vault_add_files,
+            commands::vault::vault_export_files,
             commands::storage::get_storage_diagnostics,
             commands::storage::purge_cache,
+            commands::storage::set_thumbnail_cache_limit,
+            commands::storage::prune_thumbnail_cache,
             commands::secure::authenticate_vault,
             commands::secure::scrub_exif_metadata,
             commands::secure::audit_file_checksum,

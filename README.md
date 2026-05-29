@@ -23,6 +23,19 @@ Folio is a high-performance, macOS-native media viewer. It uses Tauri for its ar
 - **Export Watermarking**: Optional text watermark overlay applied dynamically on image export.
 - **Custom SVG Icon System**: Every icon in the app uses crisp, consistent inline SVGs — no emoji fallbacks.
 - **Window Vibrancy**: Optional macOS-native window transparency and background tinting.
+- **Secure Album Vault**: Touch ID-gated encrypted vault storage for sensitive media, backed by macOS Keychain key material where available.
+- **Smart Catalog Workflows**: Ratings, favorites, smart filters, saved smart albums, sidecar metadata export/import, and job-tracked batch operations.
+- **Release-Grade Packaging**: macOS packaging now validates and bundles the Touch ID helper required for biometric vault security.
+
+## v1.4.0 Roadmap Snapshot
+
+Folio v1.4.0 focuses on turning the viewer into a safer catalog workflow tool:
+
+- Secure Album Vault with Touch ID unlock, auto-lock behavior, and protected command boundaries.
+- Cancellable backend jobs for transcode, EXIF scrub, vault import/export, thumbnail warmup, ratings, favorites, and trash.
+- Smarter catalog organization through favorites, 0-5 ratings, smart filters, saved smart albums, and metadata sidecars.
+- Better operational controls with thumbnail cache quotas, prune actions, decode failure caching, and navigation-aware prefetch.
+- More native macOS workflow affordances with Finder actions in breadcrumbs, recent folders, duplicate resolver cards, and batch selections.
 
 ## 🗺️ Roadmap & Upcoming Changes
 

@@ -617,6 +617,43 @@ impl LibraryCache {
             conn.execute("PRAGMA user_version = 4;", [])?;
         }
 
+        let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version < 5 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS media_attributes (
+                    path TEXT PRIMARY KEY,
+                    rating INTEGER,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    updated_secs INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS smart_albums (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    filter_json TEXT NOT NULL,
+                    created_secs INTEGER NOT NULL,
+                    updated_secs INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS batch_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operation TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_secs INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS vault_items (
+                    id TEXT PRIMARY KEY,
+                    vault_name TEXT NOT NULL,
+                    original_path TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    encrypted_path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    added_secs INTEGER NOT NULL
+                );
+                "#,
+            )?;
+            conn.execute("PRAGMA user_version = 5;", [])?;
+        }
+
         Ok(())
     }
 
