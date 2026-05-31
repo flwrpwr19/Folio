@@ -4,6 +4,7 @@ pub use edit::{SimpleEdit, apply_edit};
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use exif::{In, Reader, Tag};
@@ -46,6 +47,38 @@ pub enum MediaError {
     Unsupported(PathBuf),
 }
 
+struct NativeToolGate {
+    available: Mutex<usize>,
+    ready: Condvar,
+}
+
+pub struct NativeToolPermit(&'static NativeToolGate);
+
+impl Drop for NativeToolPermit {
+    fn drop(&mut self) {
+        let mut available = self.0.available.lock().unwrap_or_else(|e| e.into_inner());
+        *available += 1;
+        self.0.ready.notify_one();
+    }
+}
+
+pub fn native_tool_permit() -> NativeToolPermit {
+    static GATE: OnceLock<NativeToolGate> = OnceLock::new();
+    let gate = GATE.get_or_init(|| NativeToolGate {
+        available: Mutex::new(4),
+        ready: Condvar::new(),
+    });
+    let mut available = gate.available.lock().unwrap_or_else(|e| e.into_inner());
+    while *available == 0 {
+        available = gate
+            .ready
+            .wait(available)
+            .unwrap_or_else(|e| e.into_inner());
+    }
+    *available -= 1;
+    NativeToolPermit(gate)
+}
+
 pub fn supported_image_extensions() -> &'static [&'static str] {
     &[
         // Browser-native (image crate handles these fine)
@@ -61,7 +94,7 @@ pub fn supported_image_extensions() -> &'static [&'static str] {
 }
 
 pub fn supported_video_extensions() -> &'static [&'static str] {
-    &["mp4", "mov", "mkv", "webm"]
+    &["mp4", "m4v", "mov", "mkv", "webm", "avi"]
 }
 
 pub fn is_supported_media_path(path: &Path) -> bool {
@@ -153,6 +186,7 @@ pub fn sips_output_to_file(
     format: &str,
 ) -> Result<()> {
     use std::process::Command;
+    let _permit = native_tool_permit();
     let mut cmd = Command::new("sips");
     cmd.arg("-s").arg("format").arg(format);
 
@@ -192,6 +226,7 @@ pub fn sips_output_to_file(
 #[cfg(target_os = "macos")]
 pub fn sips_decode(path: &Path) -> Result<DynamicImage> {
     use std::process::Command;
+    let _permit = native_tool_permit();
 
     // Include mtime in cache key so edits to the source file invalidate the cache
     let mtime = std::fs::metadata(path)
@@ -234,6 +269,7 @@ pub fn sips_decode(path: &Path) -> Result<DynamicImage> {
 #[cfg(target_os = "macos")]
 pub fn sips_get_dimensions(path: &Path) -> Result<(u32, u32)> {
     use std::process::Command;
+    let _permit = native_tool_permit();
     let output = Command::new("sips")
         .args(["-g", "pixelWidth", "-g", "pixelHeight"])
         .arg(path)
@@ -319,6 +355,7 @@ pub fn open_image(path: &Path) -> Result<DynamicImage> {
 #[cfg(target_os = "macos")]
 pub fn get_video_dimensions_macos(path: &Path) -> Option<(u32, u32)> {
     use std::process::Command;
+    let _permit = native_tool_permit();
     let output = Command::new("mdls")
         .arg("-name")
         .arg("kMDItemPixelWidth")
@@ -354,6 +391,68 @@ pub fn get_video_dimensions_macos(path: &Path) -> Option<(u32, u32)> {
         (Some(w), Some(h)) => Some((w, h)),
         _ => None,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn read_spotlight_exif_macos(path: &Path) -> Option<ExifData> {
+    use std::process::Command;
+
+    let _permit = native_tool_permit();
+    let output = Command::new("mdls")
+        .arg("-name")
+        .arg("kMDItemAcquisitionModel")
+        .arg("-name")
+        .arg("kMDItemFNumber")
+        .arg("-name")
+        .arg("kMDItemExposureTimeSeconds")
+        .arg("-name")
+        .arg("kMDItemISOSpeed")
+        .arg("-name")
+        .arg("kMDItemFocalLength")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value = |name: &str| {
+        stdout.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != name {
+                return None;
+            }
+            let value = value.trim().trim_matches('"');
+            (value != "(null)").then(|| value.to_string())
+        })
+    };
+    let camera = value("kMDItemAcquisitionModel");
+    let aperture = value("kMDItemFNumber").map(|value| format!("f/{value}"));
+    let shutter_speed = value("kMDItemExposureTimeSeconds").map(|value| {
+        value
+            .parse::<f64>()
+            .ok()
+            .filter(|seconds| *seconds > 0.0 && *seconds < 1.0)
+            .map(|seconds| format!("1/{:.0} s", 1.0 / seconds))
+            .unwrap_or_else(|| format!("{value} s"))
+    });
+    let iso = value("kMDItemISOSpeed");
+    let focal_length = value("kMDItemFocalLength").map(|value| format!("{value} mm"));
+    let has_exif = camera.is_some()
+        || aperture.is_some()
+        || shutter_speed.is_some()
+        || iso.is_some()
+        || focal_length.is_some();
+    has_exif.then_some(ExifData {
+        camera,
+        aperture,
+        shutter_speed,
+        iso,
+        focal_length,
+        latitude: None,
+        longitude: None,
+    })
 }
 
 /// Fast path for folder indexing: dimensions only, no full EXIF parse (large RAW folders).
@@ -423,10 +522,11 @@ pub fn read_metadata_for_index(path: &Path) -> Result<ImageMetadata> {
         }
     };
 
+    let orientation = read_exif_orientation(path).unwrap_or(1);
     Ok(ImageMetadata {
         width,
         height,
-        orientation: 1,
+        orientation,
         format,
         exif: None,
         focus_score: None,
@@ -503,7 +603,11 @@ pub fn read_metadata_fast(path: &Path) -> Result<ImageMetadata> {
         }
     };
 
-    let (orientation, exif_data) = read_full_exif(path).unwrap_or((1, None));
+    let (orientation, mut exif_data) = read_full_exif(path).unwrap_or((1, None));
+    #[cfg(target_os = "macos")]
+    if exif_data.is_none() {
+        exif_data = read_spotlight_exif_macos(path);
+    }
     Ok(ImageMetadata {
         width,
         height,
@@ -707,9 +811,9 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
 }
 
 /// Decode and apply EXIF orientation to an already-opened DynamicImage.
-pub fn apply_exif_orientation(image: &DynamicImage, path: &Path) -> DynamicImage {
+pub fn apply_exif_orientation(image: DynamicImage, path: &Path) -> DynamicImage {
     let orientation = read_exif_orientation(path).unwrap_or(1);
-    apply_orientation(image.clone(), orientation)
+    apply_orientation(image, orientation)
 }
 
 /// Apply a known orientation value to an already-opened DynamicImage.
@@ -958,6 +1062,12 @@ pub fn detect_focus_blur(img: &DynamicImage) -> f64 {
 mod tests {
     use super::*;
 
+    fn testing_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Testing")
+            .join(name)
+    }
+
     #[test]
     fn detects_supported_extensions() {
         assert!(is_supported_image_path(Path::new("a.JPG")));
@@ -984,5 +1094,46 @@ mod tests {
         let image = DynamicImage::new_rgba8(100, 50);
         let rotated = apply_orientation(image, 6);
         assert_eq!(rotated.dimensions(), (50, 100));
+    }
+
+    #[test]
+    fn detailed_metadata_reads_testing_gps_fixture() {
+        let metadata = match read_metadata(&testing_fixture("GPS/DSCN0012.jpg")) {
+            Ok(metadata) => metadata,
+            Err(error) => panic!("failed to read GPS fixture metadata: {error}"),
+        };
+        let exif = match metadata.exif {
+            Some(exif) => exif,
+            None => panic!("GPS fixture should expose EXIF metadata"),
+        };
+        assert!(exif.camera.is_some());
+        assert!(exif.latitude.is_some());
+        assert!(exif.longitude.is_some());
+    }
+
+    #[test]
+    fn full_exif_reads_testing_tiff_fixture() {
+        let fixture = testing_fixture("Leica - SL2 - 14bit uncompressed (3_2).tiff");
+        let (_, exif) = match read_full_exif(&fixture) {
+            Ok(metadata) => metadata,
+            Err(error) => panic!("failed to read TIFF fixture EXIF: {error}"),
+        };
+        assert!(exif.and_then(|data| data.camera).is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detailed_metadata_uses_spotlight_for_testing_raf_fixture() {
+        let fixture = testing_fixture("Fujifilm - X-T30 III - 14bit uncompressed (3_2).RAF");
+        let metadata = match read_metadata(&fixture) {
+            Ok(metadata) => metadata,
+            Err(error) => panic!("failed to read RAF fixture metadata: {error}"),
+        };
+        let exif = match metadata.exif {
+            Some(exif) => exif,
+            None => panic!("RAF fixture should expose Spotlight metadata"),
+        };
+        assert_eq!(exif.camera.as_deref(), Some("X-T30 III"));
+        assert_eq!(exif.iso.as_deref(), Some("160"));
     }
 }

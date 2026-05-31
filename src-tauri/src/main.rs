@@ -104,24 +104,50 @@ pub fn save_recent_folders(recents: &[String]) {
     }
 }
 
+/// MIME type for `<video>` / protocol responses. WebKit often rejects `.mov` when served as
+/// `video/quicktime` over a custom scheme; H.264/HEVC MOV is served as `video/mp4`.
+fn content_type_for_path(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("mp4") | Some("m4v") | Some("mov") => "video/mp4".to_string(),
+        Some("webm") => "video/webm".to_string(),
+        Some("mkv") => "video/x-matroska".to_string(),
+        Some("avi") => "video/x-msvideo".to_string(),
+        _ => mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string(),
+    }
+}
+
 fn parse_range(header: &str, file_len: u64) -> Option<(u64, u64)> {
+    if file_len == 0 {
+        return None;
+    }
     let s = header.strip_prefix("bytes=")?;
     let mut parts = s.splitn(2, '-');
     let start_str = parts.next()?;
     let end_str = parts.next()?;
-    let start: u64 = if start_str.is_empty() {
+
+    let (start, end) = if start_str.is_empty() {
+        // Suffix range: bytes=-500 (last 500 bytes) — WebKit uses this for moov atoms at EOF.
         let suffix: u64 = end_str.parse().ok()?;
-        file_len.saturating_sub(suffix)
+        let start = file_len.saturating_sub(suffix);
+        (start, file_len.saturating_sub(1))
     } else {
-        start_str.parse().ok()?
+        let start: u64 = start_str.parse().ok()?;
+        let end: u64 = if end_str.is_empty() {
+            file_len.saturating_sub(1)
+        } else {
+            end_str.parse().ok()?
+        };
+        (start, end.min(file_len.saturating_sub(1)))
     };
-    let end: u64 = if end_str.is_empty() {
-        file_len.saturating_sub(1)
-    } else {
-        end_str.parse().ok()?
-    };
+
     if start <= end && start < file_len {
-        Some((start, end.min(file_len - 1)))
+        Some((start, end))
     } else {
         None
     }
@@ -132,7 +158,7 @@ pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
         return false;
     };
 
-    if commands::vault::is_vault_path(&canonical_path) {
+    if state.vault.contains_canonical_path(&canonical_path) {
         return false;
     }
 
@@ -258,8 +284,14 @@ fn main() {
                 }
             };
             let file_len = file_meta.len();
-            let mime = mime_guess::from_path(&path).first_or_octet_stream();
             let is_video = is_video_path(&path);
+            let content_type = if is_video {
+                content_type_for_path(&path)
+            } else {
+                mime_guess::from_path(&path)
+                    .first_or_octet_stream()
+                    .to_string()
+            };
 
             let modified = file_meta
                 .modified()
@@ -285,26 +317,33 @@ fn main() {
                 }
             }
 
+            const MAX_BUFFERED_PROTOCOL_RESPONSE: u64 = 64 * 1024 * 1024;
+            const STREAM_CHUNK: u64 = 1024 * 1024;
+
             let range_header = request
                 .headers()
                 .get("range")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string())
                 .or_else(|| {
-                    if is_video {
+                    // Large videos cannot be buffered whole; start byte-range delivery.
+                    if is_video && file_len > MAX_BUFFERED_PROTOCOL_RESPONSE {
                         Some("bytes=0-".to_string())
                     } else {
                         None
                     }
                 });
 
-            const STREAM_CHUNK: u64 = 1024 * 1024;
-
             if file_len > 0 {
                 if let Some(ref range_val) = range_header {
                     if let Some((start, end)) = parse_range(range_val, file_len) {
                         let length = end - start + 1;
-                        let chunk_size = length.min(STREAM_CHUNK);
+                        let max_chunk = if is_video {
+                            MAX_BUFFERED_PROTOCOL_RESPONSE
+                        } else {
+                            STREAM_CHUNK
+                        };
+                        let chunk_size = length.min(max_chunk);
 
                         let file = match std::fs::File::open(&path) {
                             Ok(f) => f,
@@ -324,7 +363,7 @@ fn main() {
                         buf.truncate(bytes_read);
                         return tauri::http::Response::builder()
                             .status(206)
-                            .header("Content-Type", mime.as_ref())
+                            .header("Content-Type", content_type.as_str())
                             .header("Accept-Ranges", "bytes")
                             .header(
                                 "Content-Range",
@@ -343,7 +382,6 @@ fn main() {
                 }
             }
 
-            const MAX_BUFFERED_PROTOCOL_RESPONSE: u64 = 64 * 1024 * 1024;
             if file_len > MAX_BUFFERED_PROTOCOL_RESPONSE {
                 return tauri::http::Response::builder()
                     .status(413)
@@ -370,14 +408,16 @@ fn main() {
             } else {
                 "public, max-age=3600"
             };
-            tauri::http::Response::builder()
+            let mut response = tauri::http::Response::builder()
                 .header("Access-Control-Allow-Origin", "*")
-                .header("Content-Type", mime.as_ref())
+                .header("Content-Type", content_type.as_str())
                 .header("Cache-Control", cache_val)
                 .header("ETag", etag)
-                .header("Content-Length", data.len().to_string())
-                .body(data)
-                .unwrap()
+                .header("Content-Length", data.len().to_string());
+            if is_video {
+                response = response.header("Accept-Ranges", "bytes");
+            }
+            response.body(data).unwrap()
         })
         .setup(|app| {
             use tauri::Emitter;
@@ -452,6 +492,7 @@ fn main() {
             commands::catalog::open_media_at_path,
             drain_pending_open_paths,
             commands::catalog::get_folder_items,
+            commands::catalog::get_media_metadata,
             commands::catalog::refresh_active_library,
             commands::catalog::create_physical_folder,
             commands::catalog::delete_physical_file,
@@ -557,4 +598,27 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mov_uses_mp4_mime_for_html_video() {
+        assert_eq!(
+            content_type_for_path(Path::new("/tmp/clip.MOV")),
+            "video/mp4"
+        );
+    }
+
+    #[test]
+    fn parse_open_ended_range() {
+        assert_eq!(parse_range("bytes=0-", 10_000_000), Some((0, 9_999_999)));
+    }
+
+    #[test]
+    fn parse_suffix_range() {
+        assert_eq!(parse_range("bytes=-500", 10_000), Some((9500, 9999)));
+    }
 }

@@ -1,6 +1,7 @@
 use crate::AppState;
 use library_core::rusqlite;
 use media_core::SimpleEdit;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -97,28 +98,62 @@ pub fn set_media_attribute_sync(
         return Err("Rating must be between 0 and 5".to_string());
     }
     let conn = state.cache.conn().map_err(|e| e.to_string())?;
-    let existing: Option<(Option<u8>, bool)> = conn
-        .query_row(
-            "SELECT rating, favorite FROM media_attributes WHERE path = ?",
-            rusqlite::params![path],
-            |row| {
-                Ok((
-                    row.get::<_, Option<u8>>(0)?,
-                    row.get::<_, i64>(1).map(|v| v != 0)?,
-                ))
-            },
-        )
-        .ok();
-    let next_rating = rating.or_else(|| existing.as_ref().and_then(|e| e.0));
-    let next_favorite = favorite.unwrap_or_else(|| existing.map(|e| e.1).unwrap_or(false));
     conn.execute(
         "INSERT INTO media_attributes (path, rating, favorite, updated_secs) VALUES (?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET rating = excluded.rating, favorite = excluded.favorite, updated_secs = excluded.updated_secs",
-        rusqlite::params![path, next_rating, i64::from(next_favorite), now_secs()],
+         ON CONFLICT(path) DO UPDATE SET
+             rating = COALESCE(excluded.rating, media_attributes.rating),
+             favorite = COALESCE(?5, media_attributes.favorite),
+             updated_secs = excluded.updated_secs",
+        rusqlite::params![
+            path,
+            rating,
+            favorite.map(i64::from).unwrap_or(0),
+            now_secs(),
+            favorite.map(i64::from)
+        ],
     )
     .map_err(|e| e.to_string())?;
     state.cache.schedule_flush();
     Ok(())
+}
+
+fn set_media_attributes_batch_sync(
+    state: &AppState,
+    paths: &[String],
+    rating: Option<u8>,
+    favorite: Option<bool>,
+) -> Result<BatchResult, String> {
+    if rating.is_some_and(|value| value > 5) {
+        return Err("Rating must be between 0 and 5".to_string());
+    }
+    let mut conn = state.cache.conn().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut stmt = tx
+        .prepare_cached(
+            "INSERT INTO media_attributes (path, rating, favorite, updated_secs) VALUES (?, ?, ?, ?)
+             ON CONFLICT(path) DO UPDATE SET
+                 rating = COALESCE(excluded.rating, media_attributes.rating),
+                 favorite = COALESCE(?5, media_attributes.favorite),
+                 updated_secs = excluded.updated_secs",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut result = BatchResult::default();
+    for path in paths {
+        match stmt.execute(rusqlite::params![
+            path,
+            rating,
+            favorite.map(i64::from).unwrap_or(0),
+            now_secs(),
+            favorite.map(i64::from)
+        ]) {
+            Ok(_) => result.success += 1,
+            Err(e) => result.push_error(format!("{path}: {e}")),
+        }
+    }
+    drop(stmt);
+    tx.commit().map_err(|e| e.to_string())?;
+    state.cache.schedule_flush();
+    Ok(result)
 }
 
 fn record_batch_history(state: &AppState, operation: &str, payload: serde_json::Value) {
@@ -153,7 +188,7 @@ pub async fn update_exif_metadata(
 
         let mut index_lock = state_arc.index.write();
         if let Some(index) = &mut *index_lock {
-            if let Some(item) = index.items.iter_mut().find(|it| it.path.to_string_lossy() == path) {
+            if let Some(item) = index.get_mut(PathBuf::from(&path).as_path()) {
                 if item.metadata.exif.is_none() {
                     item.metadata.exif = Some(media_core::ExifData::default());
                 }
@@ -369,30 +404,59 @@ pub async fn get_folder_tags_summary(
 ) -> Result<Vec<(String, String, String)>, String> {
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let folder_paths: std::collections::HashSet<String> = state_arc
+        let folder_paths: Vec<String> = state_arc
             .index
             .read()
             .as_ref()
-            .map(|idx| idx.items.iter().map(|item| item.path.to_string_lossy().to_string()).collect())
+            .map(|idx| {
+                idx.items
+                    .iter()
+                    .map(|item| item.path.to_string_lossy().to_string())
+                    .collect()
+            })
             .unwrap_or_default();
 
         if folder_paths.is_empty() {
             return Ok(Vec::new());
         }
 
-        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare(
-            "SELECT it.image_path, it.tag_name, COALESCE(t.color, '#D4A72C') FROM image_tags it LEFT JOIN tags t ON it.tag_name = t.name"
-        ).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-        }).map_err(|e| e.to_string())?;
+        let mut conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS active_folder_paths(path TEXT PRIMARY KEY);
+             DELETE FROM active_folder_paths;",
+        )
+        .map_err(|e| e.to_string())?;
+        {
+            let mut insert = tx
+                .prepare_cached("INSERT OR IGNORE INTO active_folder_paths(path) VALUES (?)")
+                .map_err(|e| e.to_string())?;
+            for path in folder_paths {
+                insert
+                    .execute(rusqlite::params![path])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        let mut stmt = tx
+            .prepare(
+                "SELECT it.image_path, it.tag_name, COALESCE(t.color, '#D4A72C')
+             FROM active_folder_paths fp
+             JOIN image_tags it ON it.image_path = fp.path
+             LEFT JOIN tags t ON it.tag_name = t.name",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
         let mut results = Vec::new();
         for row in rows {
-            let item = row.map_err(|e| e.to_string())?;
-            if folder_paths.contains(&item.0) {
-                results.push(item);
-            }
+            results.push(row.map_err(|e| e.to_string())?);
         }
         Ok(results)
     })
@@ -434,26 +498,27 @@ pub async fn batch_add_tag(
 
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
         let color = tag_color.unwrap_or_else(|| "#D4A72C".to_string());
         let mut result = BatchResult::default();
-
-        conn.execute(
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
             "INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)",
             rusqlite::params![tag_name, color],
         )
         .map_err(|e| e.to_string())?;
 
+        let mut stmt = tx
+            .prepare_cached("INSERT OR IGNORE INTO image_tags (image_path, tag_name) VALUES (?, ?)")
+            .map_err(|e| e.to_string())?;
         for path in paths {
-            match conn.execute(
-                "INSERT OR IGNORE INTO image_tags (image_path, tag_name) VALUES (?, ?)",
-                rusqlite::params![path, tag_name],
-            ) {
+            match stmt.execute(rusqlite::params![path, tag_name]) {
                 Ok(_) => result.success += 1,
                 Err(e) => result.push_error(e.to_string()),
             }
         }
-
+        drop(stmt);
+        tx.commit().map_err(|e| e.to_string())?;
         state_arc.cache.schedule_flush();
         Ok::<BatchResult, String>(result)
     })
@@ -485,7 +550,7 @@ pub async fn batch_trash_files(
                         );
                     }
                     if let Some(index) = &mut *state_arc.index.write() {
-                        index.items.retain(|item| item.path != p);
+                        index.remove(&p);
                     }
                 }
                 Err(e) => result.push_error(e.to_string()),
@@ -533,13 +598,7 @@ pub async fn set_media_rating(
     }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut result = BatchResult::default();
-        for path in &paths {
-            match set_media_attribute_sync(&state_arc, path, rating, None) {
-                Ok(()) => result.success += 1,
-                Err(e) => result.push_error(format!("{path}: {e}")),
-            }
-        }
+        let result = set_media_attributes_batch_sync(&state_arc, &paths, rating, None)?;
         record_batch_history(
             &state_arc,
             "set_rating",
@@ -562,13 +621,7 @@ pub async fn set_media_favorite(
     }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut result = BatchResult::default();
-        for path in &paths {
-            match set_media_attribute_sync(&state_arc, path, None, Some(favorite)) {
-                Ok(()) => result.success += 1,
-                Err(e) => result.push_error(format!("{path}: {e}")),
-            }
-        }
+        let result = set_media_attributes_batch_sync(&state_arc, &paths, None, Some(favorite))?;
         record_batch_history(
             &state_arc,
             "set_favorite",
@@ -590,28 +643,54 @@ pub async fn get_media_attributes(
     }
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
-        let mut attrs = Vec::with_capacity(paths.len());
-        for path in paths {
-            let row = conn
-                .query_row(
-                    "SELECT rating, favorite FROM media_attributes WHERE path = ?",
-                    rusqlite::params![path.clone()],
-                    |row| {
-                        Ok(MediaAttribute {
-                            path: path.clone(),
-                            rating: row.get(0)?,
-                            favorite: row.get::<_, i64>(1)? != 0,
-                        })
-                    },
-                )
-                .ok();
-            attrs.push(row.unwrap_or(MediaAttribute {
-                path,
-                rating: None,
-                favorite: false,
-            }));
+        let mut conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS requested_attribute_paths(path TEXT PRIMARY KEY);
+             DELETE FROM requested_attribute_paths;",
+        )
+        .map_err(|e| e.to_string())?;
+        {
+            let mut insert = tx
+                .prepare_cached("INSERT OR IGNORE INTO requested_attribute_paths(path) VALUES (?)")
+                .map_err(|e| e.to_string())?;
+            for path in &paths {
+                insert
+                    .execute(rusqlite::params![path])
+                    .map_err(|e| e.to_string())?;
+            }
         }
+        let mut stmt = tx
+            .prepare(
+                "SELECT rp.path, ma.rating, COALESCE(ma.favorite, 0)
+                 FROM requested_attribute_paths rp
+                 LEFT JOIN media_attributes ma ON ma.path = rp.path",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(MediaAttribute {
+                    path: row.get(0)?,
+                    rating: row.get(1)?,
+                    favorite: row.get::<_, i64>(2)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut by_path = HashMap::with_capacity(paths.len());
+        for row in rows {
+            let attr = row.map_err(|e| e.to_string())?;
+            by_path.insert(attr.path.clone(), attr);
+        }
+        let attrs = paths
+            .into_iter()
+            .map(|path| {
+                by_path.remove(&path).unwrap_or(MediaAttribute {
+                    path,
+                    rating: None,
+                    favorite: false,
+                })
+            })
+            .collect();
         Ok::<Vec<MediaAttribute>, String>(attrs)
     })
     .await

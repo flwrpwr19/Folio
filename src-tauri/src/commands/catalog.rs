@@ -1,16 +1,59 @@
 use crate::{AppState, UiExif, UiItem};
-use library_core::{LibraryIndex, build_index};
+use library_core::{LibraryIndex, build_index, build_index_incremental};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, State};
+
+fn apply_watcher_paths(paths: HashSet<PathBuf>, state: &AppState) -> bool {
+    let mut changed = false;
+    for path in paths {
+        if let Ok(file_meta) = std::fs::metadata(&path) {
+            if media_core::is_supported_media_path(&path)
+                && file_meta.is_file()
+                && let Ok(metadata) = media_core::read_metadata(&path)
+            {
+                let _ = state.cache.upsert_metadata(&path, &metadata);
+                let item = library_core::LibraryItem {
+                    path: path.clone(),
+                    metadata,
+                    is_video: media_core::is_video_path(&path),
+                    size: file_meta.len(),
+                    modified: file_meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                };
+                if let Some(index) = &mut *state.index.write() {
+                    index.upsert(item);
+                    changed = true;
+                }
+            }
+        } else {
+            if let Some(index) = &mut *state.index.write() {
+                changed |= index.remove(&path);
+            }
+            if let Ok(conn) = state.cache.conn() {
+                let _ = conn.execute(
+                    "DELETE FROM image_metadata WHERE path = ?",
+                    library_core::rusqlite::params![path.to_string_lossy()],
+                );
+                state.cache.schedule_flush();
+            }
+        }
+    }
+    changed
+}
 
 fn setup_watcher(
     folder_path: &Path,
     state: &Arc<AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let state_clone = Arc::clone(state);
     let path_buf = folder_path.to_path_buf();
 
     let mut watcher_lock = state.watcher.write();
@@ -18,124 +61,30 @@ fn setup_watcher(
         let _ = old_watcher.unwatch(&path_buf);
     }
 
-    let app_handle_clone = app_handle.clone();
+    let (event_tx, event_rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
+    let worker_state = Arc::clone(state);
+    let worker_app = app_handle.clone();
+    std::thread::spawn(move || {
+        while let Ok(first_paths) = event_rx.recv() {
+            let mut pending: HashSet<PathBuf> = first_paths.into_iter().collect();
+            while let Ok(paths) = event_rx.recv_timeout(Duration::from_millis(150)) {
+                pending.extend(paths);
+            }
+            if apply_watcher_paths(pending, &worker_state) {
+                let _ = worker_app.emit("fs-change", ());
+            }
+        }
+    });
+
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                match event.kind {
-                    EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_) => {
-                        let state_arc = state_clone.clone();
-                        let app_h = app_handle_clone.clone();
-
-                        tauri::async_runtime::spawn(async move {
-                            let state_for_blocking = state_arc.clone();
-                            let res = tauri::async_runtime::spawn_blocking(move || {
-                                let mut changed = false;
-                                for path in &event.paths {
-                                    let is_supported =
-                                        match path.extension().and_then(|ext| ext.to_str()) {
-                                            Some(ext) => {
-                                                let ext_lower = ext.to_ascii_lowercase();
-                                                matches!(
-                                                    ext_lower.as_str(),
-                                                    "jpg"
-                                                        | "jpeg"
-                                                        | "png"
-                                                        | "webp"
-                                                        | "gif"
-                                                        | "bmp"
-                                                        | "heic"
-                                                        | "heif"
-                                                        | "dng"
-                                                        | "raw"
-                                                        | "cr2"
-                                                        | "nef"
-                                                        | "arw"
-                                                        | "mp4"
-                                                        | "mov"
-                                                        | "mkv"
-                                                        | "avi"
-                                                )
-                                            }
-                                            None => false,
-                                        };
-
-                                    if path.exists() {
-                                        if is_supported && path.is_file() {
-                                            if let Ok(metadata) = media_core::read_metadata(path) {
-                                                let _ = state_for_blocking
-                                                    .cache
-                                                    .upsert_metadata(path, &metadata);
-                                                let is_video = media_core::is_video_path(path);
-                                                let file_meta = std::fs::metadata(path).ok();
-                                                let size = file_meta
-                                                    .as_ref()
-                                                    .map(|m| m.len())
-                                                    .unwrap_or(0);
-                                                let modified = file_meta
-                                                    .as_ref()
-                                                    .and_then(|m| m.modified().ok())
-                                                    .and_then(|t| {
-                                                        t.duration_since(std::time::UNIX_EPOCH).ok()
-                                                    })
-                                                    .map(|d| d.as_secs())
-                                                    .unwrap_or(0);
-                                                let item = library_core::LibraryItem {
-                                                    path: path.clone(),
-                                                    metadata,
-                                                    is_video,
-                                                    size,
-                                                    modified,
-                                                };
-
-                                                let mut index_lock =
-                                                    state_for_blocking.index.write();
-                                                if let Some(index) = &mut *index_lock {
-                                                    if let Some(existing) = index
-                                                        .items
-                                                        .iter_mut()
-                                                        .find(|it| it.path == *path)
-                                                    {
-                                                        *existing = item;
-                                                    } else {
-                                                        index.items.push(item);
-                                                    }
-                                                    changed = true;
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        // Path does not exist anymore (removed/moved)
-                                        let mut index_lock = state_for_blocking.index.write();
-                                        if let Some(index) = &mut *index_lock {
-                                            let original_len = index.items.len();
-                                            index.items.retain(|it| it.path != *path);
-                                            if index.items.len() != original_len {
-                                                changed = true;
-                                            }
-                                        }
-
-                                        if let Ok(conn) = state_for_blocking.cache.conn() {
-                                            let _ = conn.execute(
-                                                "DELETE FROM image_metadata WHERE path = ?",
-                                                library_core::rusqlite::params![
-                                                    path.to_string_lossy()
-                                                ],
-                                            );
-                                            state_for_blocking.cache.schedule_flush();
-                                        }
-                                    }
-                                }
-                                changed
-                            })
-                            .await;
-                            if let Ok(true) = res {
-                                let _ = app_h.emit("fs-change", ());
-                            }
-                        });
-                    }
-                    _ => {}
-                }
+            if let Ok(event) = res
+                && matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_)
+                )
+            {
+                let _ = event_tx.send(event.paths);
             }
         },
         notify::Config::default(),
@@ -164,11 +113,11 @@ pub async fn open_folder_picker(
     let path_str = tauri::async_runtime::spawn_blocking(move || {
         let index = build_index(&folder_path, &state_arc.cache).map_err(|e| e.to_string())?;
         let path_str = folder_path.to_string_lossy().to_string();
-        *state_arc.index.write() = Some(index.clone());
+        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
+        *state_arc.index.write() = Some(index);
 
         // Spawn background thread to pre-warm thumbnails in parallel
         let state_clone = state_arc.clone();
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
         std::thread::spawn(move || {
             state_clone.cache.warm_thumbnails(&paths, 0, 320);
         });
@@ -215,7 +164,13 @@ pub async fn open_media_at_path(
         .ok_or_else(|| "File has no parent directory".to_string())?;
     let folder_str = parent.to_string_lossy().to_string();
     let file_str = path.to_string_lossy().to_string();
-    open_specific_folder(folder_str.clone(), state, app_handle).await?;
+    open_specific_folder_with_active(
+        folder_str.clone(),
+        Some(path),
+        state.inner().clone(),
+        app_handle,
+    )
+    .await?;
     Ok(OpenMediaResult {
         folder: folder_str,
         file: file_str,
@@ -228,24 +183,36 @@ pub async fn open_specific_folder(
     state: State<'_, Arc<AppState>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
+    open_specific_folder_with_active(path, None, state.inner().clone(), app_handle).await
+}
+
+async fn open_specific_folder_with_active(
+    path: String,
+    active_path: Option<PathBuf>,
+    state_arc: Arc<AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
     let folder_path = PathBuf::from(&path);
     if !folder_path.exists() || !folder_path.is_dir() {
         return Err("The specified path does not exist or is not a directory".to_string());
     }
-    let state_arc = state.inner().clone();
     let folder_path_clone = folder_path.clone();
     let state_arc_clone = state_arc.clone();
     let path_str = tauri::async_runtime::spawn_blocking(move || {
         let index =
             build_index(&folder_path_clone, &state_arc_clone.cache).map_err(|e| e.to_string())?;
         let path_str = folder_path_clone.to_string_lossy().to_string();
-        *state_arc_clone.index.write() = Some(index.clone());
+        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
+        let active_index = active_path
+            .as_deref()
+            .and_then(|path| index.position(path))
+            .unwrap_or(0);
+        *state_arc_clone.index.write() = Some(index);
 
         // Spawn background thread to pre-warm thumbnails in parallel
         let state_clone = state_arc_clone.clone();
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
         std::thread::spawn(move || {
-            state_clone.cache.warm_thumbnails(&paths, 0, 320);
+            state_clone.cache.warm_thumbnails(&paths, active_index, 320);
         });
 
         Ok::<String, String>(path_str)
@@ -288,6 +255,47 @@ fn index_to_ui_items(index: &LibraryIndex) -> Vec<UiItem> {
         .collect()
 }
 
+fn exif_to_ui(exif: media_core::ExifData) -> UiExif {
+    UiExif {
+        camera: exif.camera,
+        aperture: exif.aperture,
+        shutter_speed: exif.shutter_speed,
+        iso: exif.iso,
+        focal_length: exif.focal_length,
+        latitude: exif.latitude,
+        longitude: exif.longitude,
+    }
+}
+
+#[tauri::command]
+pub async fn get_media_metadata(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<UiExif>, String> {
+    let media_path = PathBuf::from(&path);
+    if !crate::is_path_safe(&media_path, &state) {
+        return Err("Permission denied: path lies outside safe sandbox boundaries".to_string());
+    }
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut metadata = media_core::read_metadata(&media_path).map_err(|e| e.to_string())?;
+        let exif = metadata.exif.clone().map(exif_to_ui);
+        if let Some(index) = &mut *state_arc.index.write()
+            && let Some(item) = index.get_mut(&media_path)
+        {
+            metadata.focus_score = metadata.focus_score.or(item.metadata.focus_score);
+            item.metadata = metadata.clone();
+        }
+        state_arc
+            .cache
+            .upsert_metadata(&media_path, &metadata)
+            .map_err(|e| e.to_string())?;
+        Ok::<Option<UiExif>, String>(exif)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 pub struct RefreshLibraryResult {
     pub folder: String,
@@ -313,9 +321,18 @@ pub async fn refresh_active_library(
             return Err("The active folder no longer exists".to_string());
         }
 
-        let index = build_index(&folder_path, &state_arc.cache).map_err(|e| e.to_string())?;
+        let index = {
+            let guard = state_arc.index.read();
+            let previous = guard
+                .as_ref()
+                .ok_or_else(|| "No active library index".to_string())?;
+            build_index_incremental(&folder_path, &state_arc.cache, previous)
+                .map_err(|e| e.to_string())?
+        };
         let path_str = folder_path.to_string_lossy().to_string();
-        *state_arc.index.write() = Some(index.clone());
+        let items = index_to_ui_items(&index);
+        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
+        *state_arc.index.write() = Some(index);
 
         state_arc.resolved_thumbs.lock().clear();
         state_arc.preview_cache.clear();
@@ -323,10 +340,7 @@ pub async fn refresh_active_library(
         state_arc.thumb_failures.lock().clear();
         state_arc.dominant_colors.lock().clear();
 
-        let items = index_to_ui_items(&index);
-
         let state_clone = state_arc.clone();
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
         std::thread::spawn(move || {
             state_clone.cache.warm_thumbnails(&paths, 0, 320);
         });
@@ -408,7 +422,7 @@ pub async fn delete_physical_file(
 
         let mut index_lock = state_arc.index.write();
         if let Some(index) = &mut *index_lock {
-            index.items.retain(|item| item.path != p_clone);
+            index.remove(&p_clone);
         }
 
         // Also remove metadata from SQLite database cache

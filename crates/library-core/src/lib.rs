@@ -1,12 +1,12 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::UNIX_EPOCH;
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use media_core::{
-    ImageMetadata, decode_image, is_video_path, read_metadata_for_index,
-    scan_supported_images,
+    ImageMetadata, decode_image, is_video_path, read_metadata_for_index, scan_supported_images,
 };
 use r2d2::{Pool, PooledConnection};
 use rayon::prelude::*;
@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct SharedMemoryConnectionManager {
-    uri: String,
+    path: String,
 }
 
 impl SharedMemoryConnectionManager {
-    pub fn new(uri: impl Into<String>) -> Self {
-        Self { uri: uri.into() }
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
     }
 }
 
@@ -30,17 +30,13 @@ impl r2d2::ManageConnection for SharedMemoryConnectionManager {
     type Error = rusqlite::Error;
 
     fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        use rusqlite::OpenFlags;
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_URI
-            | OpenFlags::SQLITE_OPEN_SHARED_CACHE;
-        let conn = rusqlite::Connection::open_with_flags(&self.uri, flags)?;
+        let conn = rusqlite::Connection::open(&self.path)?;
         let _ = conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-64000;
-             PRAGMA temp_store=MEMORY;",
+             PRAGMA temp_store=MEMORY;
+             PRAGMA foreign_keys=ON;",
         );
         Ok(conn)
     }
@@ -97,15 +93,71 @@ pub struct LibraryItem {
 pub struct LibraryIndex {
     pub root: PathBuf,
     pub items: Vec<LibraryItem>,
+    positions: HashMap<PathBuf, usize>,
 }
 
 impl LibraryIndex {
+    pub fn new(root: PathBuf, items: Vec<LibraryItem>) -> Self {
+        let mut index = Self {
+            root,
+            items,
+            positions: HashMap::new(),
+        };
+        index.rebuild_positions();
+        index
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    pub fn get(&self, path: &Path) -> Option<&LibraryItem> {
+        self.positions
+            .get(path)
+            .and_then(|&idx| self.items.get(idx))
+    }
+
+    pub fn position(&self, path: &Path) -> Option<usize> {
+        self.positions.get(path).copied()
+    }
+
+    pub fn get_mut(&mut self, path: &Path) -> Option<&mut LibraryItem> {
+        let idx = *self.positions.get(path)?;
+        self.items.get_mut(idx)
+    }
+
+    pub fn upsert(&mut self, item: LibraryItem) {
+        if let Some(&idx) = self.positions.get(&item.path) {
+            self.items[idx] = item;
+        } else {
+            self.positions.insert(item.path.clone(), self.items.len());
+            self.items.push(item);
+        }
+    }
+
+    pub fn remove(&mut self, path: &Path) -> bool {
+        let Some(idx) = self.positions.remove(path) else {
+            return false;
+        };
+        self.items.swap_remove(idx);
+        if let Some(item) = self.items.get(idx) {
+            self.positions.insert(item.path.clone(), idx);
+        }
+        true
+    }
+
+    fn rebuild_positions(&mut self) {
+        self.positions.clear();
+        self.positions.extend(
+            self.items
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| (item.path.clone(), idx)),
+        );
     }
 }
 
@@ -133,7 +185,12 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
         paths
             .par_iter()
             .filter_map(|path| {
-                let metadata = match cache.cached_metadata(path) {
+                let file_meta = fs::metadata(path).ok();
+                let modified = file_meta.as_ref().and_then(metadata_modified_secs);
+                let metadata = match modified
+                    .map(|modified| cache.cached_metadata_with_modified(path, modified as i64))
+                    .unwrap_or(Ok(None))
+                {
                     Ok(Some(metadata)) => Some(metadata),
                     _ => {
                         match read_metadata_for_index(path) {
@@ -145,14 +202,8 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
                         }
                     }
                 }?;
-                let file_meta = fs::metadata(path).ok();
                 let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = file_meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let modified = modified.unwrap_or(0);
                 let video = is_video_path(path);
                 Some(LibraryItem {
                     path: path.clone(),
@@ -166,14 +217,58 @@ pub fn build_index(root: &Path, cache: &LibraryCache) -> Result<LibraryIndex> {
     });
 
     cache.schedule_flush();
-    if let Ok(conn) = cache.conn() {
-        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(20);");
-    }
 
-    Ok(LibraryIndex {
-        root: root.to_path_buf(),
-        items,
-    })
+    Ok(LibraryIndex::new(root.to_path_buf(), items))
+}
+
+/// Refresh an existing index while reusing unchanged entries.
+pub fn build_index_incremental(
+    root: &Path,
+    cache: &LibraryCache,
+    previous: &LibraryIndex,
+) -> Result<LibraryIndex> {
+    if previous.root != root {
+        return build_index(root, cache);
+    }
+    let paths = scan_supported_images(root)?;
+    let pool = get_index_thread_pool();
+    let items = pool.install(|| {
+        paths
+            .par_iter()
+            .filter_map(|path| {
+                let file_meta = fs::metadata(path).ok();
+                let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let modified = file_meta
+                    .as_ref()
+                    .and_then(metadata_modified_secs)
+                    .unwrap_or(0);
+                if let Some(item) = previous.get(path)
+                    && item.size == size
+                    && item.modified == modified
+                {
+                    return Some(item.clone());
+                }
+                let metadata = cache
+                    .cached_metadata_with_modified(path, modified as i64)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        let metadata = read_metadata_for_index(path).ok()?;
+                        let _ = cache.upsert_metadata(path, &metadata);
+                        Some(metadata)
+                    })?;
+                Some(LibraryItem {
+                    path: path.clone(),
+                    metadata,
+                    is_video: is_video_path(path),
+                    size,
+                    modified,
+                })
+            })
+            .collect()
+    });
+    cache.schedule_flush();
+    Ok(LibraryIndex::new(root.to_path_buf(), items))
 }
 
 pub struct LibraryCache {
@@ -185,12 +280,202 @@ pub struct LibraryCache {
     pub flush_pending: Arc<std::sync::atomic::AtomicBool>,
     pub tx: std::sync::mpsc::Sender<UpsertRequest>,
     pub shutdown: Arc<std::sync::atomic::AtomicBool>,
+    thumbnail_in_flight: Arc<(Mutex<HashSet<PathBuf>>, Condvar)>,
+    decoded_in_flight: Arc<(Mutex<HashSet<PathBuf>>, Condvar)>,
+    fingerprints: Mutex<HashMap<PathBuf, (i64, String)>>,
+    thumbnail_files: Mutex<HashMap<PathBuf, CacheFileInfo>>,
+    decoded_files: Mutex<HashMap<PathBuf, CacheFileInfo>>,
 }
 
 pub type VisualHistogram = ([u32; 256], [u32; 256], [u32; 256], [u32; 256]);
 
+#[derive(Clone)]
+struct CacheFileInfo {
+    size: u64,
+    last_used: u64,
+    last_persisted: u64,
+}
+
+struct HistogramRequest {
+    pool: Pool<SharedMemoryConnectionManager>,
+    path: PathBuf,
+    thumbnail: PathBuf,
+    image: Option<image::DynamicImage>,
+}
+
+static HISTOGRAM_QUEUE: OnceLock<std::sync::mpsc::SyncSender<HistogramRequest>> = OnceLock::new();
+
+fn histogram_queue() -> &'static std::sync::mpsc::SyncSender<HistogramRequest> {
+    HISTOGRAM_QUEUE.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<HistogramRequest>(128);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for idx in 0..LibraryCache::cache_parallelism().min(4) {
+            let receiver = Arc::clone(&receiver);
+            let _ = std::thread::Builder::new()
+                .name(format!("folio-histogram-{idx}"))
+                .spawn(move || {
+                    loop {
+                        let request = {
+                            let guard = receiver.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.recv()
+                        };
+                        let Ok(request) = request else {
+                            break;
+                        };
+                        let img = if let Some(img) = request.image {
+                            img
+                        } else {
+                            let Ok(img) = image::open(&request.thumbnail) else {
+                                continue;
+                            };
+                            img
+                        };
+                        let (r, g, b, lum) = media_core::compute_histogram_from_image(&img);
+                        let focus_score = media_core::detect_focus_blur(&img);
+                        if let Ok(conn) = request.pool.get() {
+                            let _ = conn.execute(
+                                "INSERT OR REPLACE INTO visual_histograms (path, r_blob, g_blob, b_blob, lum_blob) VALUES (?, ?, ?, ?, ?)",
+                                rusqlite::params![
+                                    request.path.to_string_lossy(),
+                                    u32_vec_to_u8_vec(&r),
+                                    u32_vec_to_u8_vec(&g),
+                                    u32_vec_to_u8_vec(&b),
+                                    u32_vec_to_u8_vec(&lum)
+                                ],
+                            );
+                            let _ = conn.execute(
+                                "UPDATE image_metadata SET focus_score = ?1 WHERE path = ?2",
+                                rusqlite::params![focus_score, request.path.to_string_lossy()],
+                            );
+                        }
+                    }
+                });
+        }
+        sender
+    })
+}
+
+fn scan_cache_files(dir: &Path) -> HashMap<PathBuf, CacheFileInfo> {
+    let mut files = HashMap::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata()
+                && meta.is_file()
+            {
+                files.insert(
+                    entry.path(),
+                    CacheFileInfo {
+                        size: meta.len(),
+                        last_used: meta
+                            .modified()
+                            .unwrap_or(SystemTime::UNIX_EPOCH)
+                            .duration_since(UNIX_EPOCH)
+                            .map(|duration| duration.as_secs())
+                            .unwrap_or(0),
+                        last_persisted: 0,
+                    },
+                );
+            }
+        }
+    }
+    files
+}
+
+fn cache_size(files: &Mutex<HashMap<PathBuf, CacheFileInfo>>) -> u64 {
+    files
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|entry| entry.size)
+        .sum()
+}
+
+fn touch_cache_file(
+    files: &Mutex<HashMap<PathBuf, CacheFileInfo>>,
+    path: &Path,
+    meta: &fs::Metadata,
+) -> Option<CacheFileInfo> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let mut files = files.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = files.entry(path.to_path_buf()).or_insert(CacheFileInfo {
+        size: meta.len(),
+        last_used: now,
+        last_persisted: 0,
+    });
+    entry.size = meta.len();
+    entry.last_used = now;
+    if now.saturating_sub(entry.last_persisted) >= 300 {
+        entry.last_persisted = now;
+        return Some(entry.clone());
+    }
+    None
+}
+
+fn prune_cache_files(
+    files: &Mutex<HashMap<PathBuf, CacheFileInfo>>,
+    limit_bytes: u64,
+) -> (u64, Vec<PathBuf>) {
+    let mut files = files.lock().unwrap_or_else(|e| e.into_inner());
+    let mut total: u64 = files.values().map(|entry| entry.size).sum();
+    if total <= limit_bytes {
+        return (0, Vec::new());
+    }
+    let mut candidates: Vec<_> = files
+        .iter()
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect();
+    candidates.sort_by_key(|(_, entry)| entry.last_used);
+    let mut removed = 0;
+    let mut removed_paths = Vec::new();
+    for (path, entry) in candidates {
+        if total <= limit_bytes {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            files.remove(&path);
+            total = total.saturating_sub(entry.size);
+            removed += entry.size;
+            removed_paths.push(path);
+        }
+    }
+    (removed, removed_paths)
+}
+
 struct FileDropGuard {
     path: PathBuf,
+}
+
+struct InFlightGuard<'a> {
+    state: &'a (Mutex<HashSet<PathBuf>>, Condvar),
+    key: PathBuf,
+}
+
+impl<'a> InFlightGuard<'a> {
+    fn acquire(state: &'a (Mutex<HashSet<PathBuf>>, Condvar), key: &Path) -> Self {
+        let (lock, ready) = state;
+        let mut in_flight = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while in_flight.contains(key) {
+            in_flight = ready.wait(in_flight).unwrap_or_else(|e| e.into_inner());
+        }
+        in_flight.insert(key.to_path_buf());
+        Self {
+            state,
+            key: key.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        let (lock, ready) = self.state;
+        lock.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+        ready.notify_all();
+    }
 }
 
 impl Drop for FileDropGuard {
@@ -220,29 +505,16 @@ impl LibraryCache {
         fs::create_dir_all(&temp_dir)?;
 
         // Open disk database and configure optimizations (WAL, Normal Sync, Incremental Vacuum)
-        let mut disk_conn = rusqlite::Connection::open(&db_path)?;
+        let disk_conn = rusqlite::Connection::open(&db_path)?;
         disk_conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA auto_vacuum=INCREMENTAL;",
         )?;
 
-        // Open transient shared in-memory connection
-        let in_mem_uri = "file:foliomem?mode=memory&cache=shared";
-        use rusqlite::OpenFlags;
-        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_URI
-            | OpenFlags::SQLITE_OPEN_SHARED_CACHE;
-        let mut in_mem_conn = rusqlite::Connection::open_with_flags(in_mem_uri, flags)?;
-
-        // Restore disk database to memory mirror on startup
-        if let Err(e) = copy_db(&disk_conn, &mut in_mem_conn) {
-            eprintln!("Failed to restore database to memory: {e:?}");
-        }
-
-        // Build r2d2 connection pool pointing to memory mirror
-        let manager = SharedMemoryConnectionManager::new(in_mem_uri);
+        // Use pooled direct WAL connections. This avoids copying the complete database for
+        // persistence while retaining SQLite's page cache and concurrent-reader behavior.
+        let manager = SharedMemoryConnectionManager::new(db_path.to_string_lossy());
         let pool = Pool::builder()
             .max_size(10)
             .build(manager)
@@ -252,10 +524,14 @@ impl LibraryCache {
 
         // Spawn background sequential writer thread for metadata upserts
         let (tx, rx) = std::sync::mpsc::channel::<UpsertRequest>();
-        let in_mem_uri_str = in_mem_uri.to_string();
+        let writer_db_path = db_path.clone();
         std::thread::spawn(move || {
-            if let Ok(mut conn) = rusqlite::Connection::open_with_flags(&in_mem_uri_str, flags) {
-                let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+            if let Ok(mut conn) = rusqlite::Connection::open(&writer_db_path) {
+                let _ = conn.execute_batch(
+                    "PRAGMA journal_mode=WAL;
+                     PRAGMA synchronous=NORMAL;
+                     PRAGMA foreign_keys=ON;",
+                );
                 let mut batch: Vec<UpsertRequest> = Vec::with_capacity(64);
                 loop {
                     batch.clear();
@@ -303,13 +579,14 @@ impl LibraryCache {
 
                         let _ = tx.execute(
                             r#"
-                            INSERT INTO image_metadata(path, modified_secs, width, height, orientation, format, camera, aperture, shutter_speed, iso, focal_length, latitude, longitude, focus_score)
-                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                            INSERT INTO image_metadata(path, modified_secs, width, height, orientation, format, camera, aperture, shutter_speed, iso, focal_length, latitude, longitude, focus_score, orientation_indexed)
+                            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1)
                             ON CONFLICT(path) DO UPDATE SET
                                 modified_secs = excluded.modified_secs,
                                 width = excluded.width,
                                 height = excluded.height,
                                 orientation = excluded.orientation,
+                                orientation_indexed = 1,
                                 format = excluded.format,
                                 camera = excluded.camera,
                                 aperture = excluded.aperture,
@@ -344,6 +621,8 @@ impl LibraryCache {
         });
 
         let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thumbnail_files = scan_cache_files(&thumb_dir);
+        let decoded_files = scan_cache_files(&decoded_dir);
 
         let cache = Self {
             pool,
@@ -354,33 +633,23 @@ impl LibraryCache {
             flush_pending: Arc::clone(&flush_pending),
             tx,
             shutdown: Arc::clone(&shutdown),
+            thumbnail_in_flight: Arc::new((Mutex::new(HashSet::new()), Condvar::new())),
+            decoded_in_flight: Arc::new((Mutex::new(HashSet::new()), Condvar::new())),
+            fingerprints: Mutex::new(HashMap::new()),
+            thumbnail_files: Mutex::new(thumbnail_files),
+            decoded_files: Mutex::new(decoded_files),
         };
 
         // Schema validation & updates
         cache.ensure_schema()?;
+        cache.restore_cache_inventory();
 
-        // Perform initial backup from memory to disk immediately so disk has schema
-        {
-            if let Ok(mem_conn) = cache.conn() {
-                let _ = copy_db(&mem_conn, &mut disk_conn);
-            }
-        }
-
-        // Spawn background mirror-to-disk flushing thread (WAL Checkpoint & Incremental Vacuum)
+        // Spawn a lightweight WAL checkpoint worker. Normal writes are already durable on disk.
         let db_path_clone = db_path.clone();
         let flush_pending_clone = Arc::clone(&flush_pending);
-        let in_mem_uri_str_flush = in_mem_uri.to_string();
         let shutdown_clone_flush = Arc::clone(&shutdown);
         std::thread::spawn(move || {
-            let mem_conn = match rusqlite::Connection::open_with_flags(&in_mem_uri_str_flush, flags)
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Flush thread: failed to open memory connection: {e:?}");
-                    return;
-                }
-            };
-            let mut disk_conn = match rusqlite::Connection::open(&db_path_clone) {
+            let disk_conn = match rusqlite::Connection::open(&db_path_clone) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Flush thread: failed to open disk connection: {e:?}");
@@ -403,31 +672,18 @@ impl LibraryCache {
                     )
                     .is_ok()
                 {
-                    if let Err(e) = copy_db(&mem_conn, &mut disk_conn) {
-                        eprintln!("Background DB flush failed: {e:?}");
-                    } else {
-                        let _ = disk_conn.execute_batch(
-                            "PRAGMA wal_checkpoint(PASSIVE);
-                             PRAGMA incremental_vacuum(50);",
-                        );
-                    }
+                    let _ = disk_conn.execute_batch(
+                        "PRAGMA wal_checkpoint(PASSIVE);
+                         PRAGMA incremental_vacuum(50);",
+                    );
                 }
             }
         });
 
         // Spawn background database auto-backup thread (runs every 10 minutes)
         let db_path_backup = db_path.clone();
-        let in_mem_uri_str_backup = in_mem_uri.to_string();
         let shutdown_clone_backup = Arc::clone(&shutdown);
         std::thread::spawn(move || {
-            let mem_conn =
-                match rusqlite::Connection::open_with_flags(&in_mem_uri_str_backup, flags) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Backup thread: failed to open memory connection: {e:?}");
-                        return;
-                    }
-                };
             while !shutdown_clone_backup.load(std::sync::atomic::Ordering::SeqCst) {
                 let mut exited = false;
                 for _ in 0..3000 {
@@ -442,49 +698,19 @@ impl LibraryCache {
                 }
                 let backup_path = db_path_backup.with_extension("sqlite3.bak");
                 let mut backup_conn_res = rusqlite::Connection::open(&backup_path);
+                let source_conn_res = rusqlite::Connection::open(&db_path_backup);
 
-                match &mut backup_conn_res {
-                    Ok(backup_conn) => {
-                        if let Err(e) = copy_db(&mem_conn, backup_conn) {
+                match (&source_conn_res, &mut backup_conn_res) {
+                    (Ok(source_conn), Ok(backup_conn)) => {
+                        if let Err(e) = copy_db(source_conn, backup_conn) {
                             eprintln!("Automated database backup failed: {e:?}");
                         }
                     }
-                    Err(e) => {
+                    (_, Err(e)) => {
                         eprintln!("Failed to open connection for automated backup: {e:?}");
                     }
-                }
-            }
-        });
-
-        // Spawn background thumbnail LRU cleaner (files older than 30 days) 5 seconds after startup
-        let thumb_dir_clone = cache.thumb_dir.clone();
-        let shutdown_clone_lru = Arc::clone(&shutdown);
-        std::thread::spawn(move || {
-            for _ in 0..25 {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                if shutdown_clone_lru.load(std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
-            }
-            let now = std::time::SystemTime::now();
-            let max_age = std::time::Duration::from_secs(30 * 24 * 60 * 60);
-            if thumb_dir_clone.exists() {
-                for entry in walkdir::WalkDir::new(&thumb_dir_clone)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                {
-                    let path = entry.path().to_path_buf();
-                    if path.is_file()
-                        && let Ok(meta) = fs::metadata(&path)
-                    {
-                        let accessed = meta.accessed().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                        let last_used = accessed.max(modified);
-                        if let Ok(age) = now.duration_since(last_used)
-                            && age > max_age
-                        {
-                            let _ = fs::remove_file(&path);
-                        }
+                    (Err(e), _) => {
+                        eprintln!("Failed to open connection for automated backup: {e:?}");
                     }
                 }
             }
@@ -505,6 +731,123 @@ impl LibraryCache {
 
     pub fn decoded_dir(&self) -> &Path {
         &self.decoded_dir
+    }
+
+    pub fn thumbnail_cache_size(&self) -> u64 {
+        cache_size(&self.thumbnail_files)
+    }
+
+    pub fn decoded_cache_size(&self) -> u64 {
+        cache_size(&self.decoded_files)
+    }
+
+    pub fn prune_thumbnails_to_limit(&self, limit_bytes: u64) -> u64 {
+        let (removed, paths) = prune_cache_files(&self.thumbnail_files, limit_bytes);
+        self.remove_persisted_cache_paths(&paths);
+        removed
+    }
+
+    pub fn reset_thumbnail_inventory(&self) {
+        self.thumbnail_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.clear_persisted_cache_kind("thumbnail");
+    }
+
+    pub fn reset_decoded_inventory(&self) {
+        self.decoded_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.clear_persisted_cache_kind("decoded");
+    }
+
+    fn restore_cache_inventory(&self) {
+        let Ok(conn) = self.conn() else {
+            return;
+        };
+        let Ok(mut stmt) = conn.prepare("SELECT path, kind, size, last_used FROM cache_files")
+        else {
+            return;
+        };
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((
+                PathBuf::from(row.get::<_, String>(0)?),
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+                row.get::<_, u64>(3)?,
+            ))
+        }) else {
+            return;
+        };
+        for row in rows.flatten() {
+            let (path, kind, _size, last_used) = row;
+            let files = if kind == "thumbnail" {
+                &self.thumbnail_files
+            } else if kind == "decoded" {
+                &self.decoded_files
+            } else {
+                continue;
+            };
+            if let Some(info) = files
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(&path)
+            {
+                info.last_used = last_used;
+                info.last_persisted = last_used;
+            }
+        }
+    }
+
+    fn clear_persisted_cache_kind(&self, kind: &str) {
+        if let Ok(conn) = self.conn() {
+            let _ = conn.execute("DELETE FROM cache_files WHERE kind = ?", [kind]);
+        }
+    }
+
+    fn remove_persisted_cache_paths(&self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        if let Ok(mut conn) = self.conn()
+            && let Ok(tx) = conn.transaction()
+        {
+            if let Ok(mut stmt) = tx.prepare_cached("DELETE FROM cache_files WHERE path = ?") {
+                for path in paths {
+                    let _ = stmt.execute([path.to_string_lossy()]);
+                }
+            }
+            let _ = tx.commit();
+        }
+    }
+
+    fn touch_cache(
+        &self,
+        kind: &str,
+        files: &Mutex<HashMap<PathBuf, CacheFileInfo>>,
+        path: &Path,
+        meta: &fs::Metadata,
+    ) {
+        let Some(info) = touch_cache_file(files, path, meta) else {
+            return;
+        };
+        if let Ok(conn) = self.conn() {
+            let _ = conn.execute(
+                "INSERT INTO cache_files(path, kind, size, last_used) VALUES (?, ?, ?, ?)
+                 ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, size = excluded.size, last_used = excluded.last_used",
+                rusqlite::params![path.to_string_lossy(), kind, info.size, info.last_used],
+            );
+        }
+    }
+
+    fn touch_thumbnail(&self, path: &Path, meta: &fs::Metadata) {
+        self.touch_cache("thumbnail", &self.thumbnail_files, path, meta);
+    }
+
+    fn touch_decoded(&self, path: &Path, meta: &fs::Metadata) {
+        self.touch_cache("decoded", &self.decoded_files, path, meta);
     }
 
     pub fn schedule_flush(&self) {
@@ -534,7 +877,8 @@ impl LibraryCache {
                     focal_length TEXT,
                     latitude REAL,
                     longitude REAL,
-                    focus_score REAL
+                    focus_score REAL,
+                    orientation_indexed INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS albums (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -660,6 +1004,38 @@ impl LibraryCache {
             conn.execute("PRAGMA user_version = 5;", [])?;
         }
 
+        let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version < 6 {
+            let table_info: Vec<String> = {
+                let mut stmt = conn.prepare("PRAGMA table_info(image_metadata)")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if !table_info.contains(&"orientation_indexed".to_string()) {
+                conn.execute(
+                    "ALTER TABLE image_metadata ADD COLUMN orientation_indexed INTEGER NOT NULL DEFAULT 0;",
+                    [],
+                )?;
+            }
+            conn.execute("PRAGMA user_version = 6;", [])?;
+        }
+
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_image_tags_tag_path ON image_tags(tag_name, image_path);
+            CREATE INDEX IF NOT EXISTS idx_album_images_path ON album_images(image_path);
+            CREATE INDEX IF NOT EXISTS idx_media_attributes_favorite_rating ON media_attributes(favorite, rating);
+            CREATE INDEX IF NOT EXISTS idx_batch_history_created ON batch_history(created_secs);
+            CREATE TABLE IF NOT EXISTS cache_files (
+                path TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                last_used INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cache_files_kind_used ON cache_files(kind, last_used);
+            "#,
+        )?;
+
         Ok(())
     }
 
@@ -675,6 +1051,14 @@ impl LibraryCache {
 
     pub fn cached_metadata(&self, path: &Path) -> Result<Option<ImageMetadata>> {
         let modified = modified_secs(path)?;
+        self.cached_metadata_with_modified(path, modified)
+    }
+
+    fn cached_metadata_with_modified(
+        &self,
+        path: &Path,
+        modified: i64,
+    ) -> Result<Option<ImageMetadata>> {
         let conn = self.conn()?;
         let row = conn
             .query_row(
@@ -759,13 +1143,33 @@ impl LibraryCache {
     }
 
     pub fn thumbnail_path(&self, path: &Path, max_side: u32) -> Result<PathBuf> {
-        let fingerprint = image_fingerprint(path)?;
+        let (fingerprint, _) = self.image_fingerprint(path)?;
         Ok(self.thumb_dir.join(format!("{fingerprint}_{max_side}.jpg")))
     }
 
+    fn cached_orientation(&self, path: &Path, modified: i64) -> Option<u16> {
+        let conn = self.conn().ok()?;
+        conn.query_row(
+            "SELECT orientation FROM image_metadata
+             WHERE path = ?1 AND modified_secs = ?2 AND orientation_indexed = 1",
+            rusqlite::params![path.to_string_lossy(), modified],
+            |row| row.get::<_, u16>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
     pub fn ensure_thumbnail(&self, path: &Path, max_side: u32) -> Result<PathBuf> {
-        let thumb_path = self.thumbnail_path(path, max_side)?;
-        if thumb_path.exists() {
+        let (fingerprint, modified) = self.image_fingerprint(path)?;
+        let thumb_path = self.thumb_dir.join(format!("{fingerprint}_{max_side}.jpg"));
+        if let Ok(meta) = fs::metadata(&thumb_path) {
+            self.touch_thumbnail(&thumb_path, &meta);
+            return Ok(thumb_path);
+        }
+        let _in_flight = InFlightGuard::acquire(&self.thumbnail_in_flight, &thumb_path);
+        if let Ok(meta) = fs::metadata(&thumb_path) {
+            self.touch_thumbnail(&thumb_path, &meta);
             return Ok(thumb_path);
         }
         let tmp_path = thumb_path.with_extension("tmp");
@@ -773,6 +1177,7 @@ impl LibraryCache {
         if is_video_path(path) {
             #[cfg(target_os = "macos")]
             {
+                let _permit = media_core::native_tool_permit();
                 let temp_dir = &self.temp_dir;
                 let output = std::process::Command::new("qlmanage")
                     .arg("-t")
@@ -815,6 +1220,9 @@ impl LibraryCache {
                         std::fs::rename(&tmp_path, &thumb_path).with_context(|| {
                             format!("failed to finalize thumbnail {}", thumb_path.display())
                         })?;
+                        if let Ok(meta) = fs::metadata(&thumb_path) {
+                            self.touch_thumbnail(&thumb_path, &meta);
+                        }
                         return Ok(thumb_path);
                     }
                 }
@@ -822,12 +1230,17 @@ impl LibraryCache {
             anyhow::bail!("cannot generate thumbnail for video: {}", path.display());
         }
 
+        let mut analysis_image = None;
         if media_core::can_use_sips(path) {
             media_core::sips_output_to_file(path, &tmp_path, Some(max_side), "jpeg")
                 .with_context(|| format!("native sips thumbnail failed for {}", path.display()))?;
         } else {
-            let decoded = decode_image(path, Some(max_side))
-                .with_context(|| format!("failed to decode thumbnail input {}", path.display()))?;
+            let decoded = if let Some(orientation) = self.cached_orientation(path, modified) {
+                media_core::decode_image_with_orientation(path, Some(max_side), orientation)
+            } else {
+                decode_image(path, Some(max_side))
+            }
+            .with_context(|| format!("failed to decode thumbnail input {}", path.display()))?;
             let rgba = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)
                 .context("failed to construct RGBA thumbnail image")?;
             let mut file = std::fs::File::create(&tmp_path).with_context(|| {
@@ -837,49 +1250,34 @@ impl LibraryCache {
                 )
             })?;
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
-            image::DynamicImage::ImageRgba8(rgba)
-                .write_with_encoder(encoder)
-                .with_context(|| {
-                    format!("failed to write JPEG thumbnail {}", tmp_path.display())
-                })?;
+            let image = image::DynamicImage::ImageRgba8(rgba);
+            image.write_with_encoder(encoder).with_context(|| {
+                format!("failed to write JPEG thumbnail {}", tmp_path.display())
+            })?;
+            analysis_image = Some(image);
         }
 
         std::fs::rename(&tmp_path, &thumb_path)
             .with_context(|| format!("failed to finalize thumbnail {}", thumb_path.display()))?;
-
-        // Compute histogram asynchronously so thumbnail is available immediately
-        {
-            let pool = self.pool.clone();
-            let path_buf = path.to_path_buf();
-            let thumb_path_buf = thumb_path.clone();
-            std::thread::spawn(move || {
-                let img = match image::open(&thumb_path_buf) {
-                    Ok(img) => img,
-                    Err(_) => return,
-                };
-                let (r, g, b, lum) = media_core::compute_histogram_from_image(&img);
-                let r_bytes = u32_vec_to_u8_vec(&r);
-                let g_bytes = u32_vec_to_u8_vec(&g);
-                let b_bytes = u32_vec_to_u8_vec(&b);
-                let lum_bytes = u32_vec_to_u8_vec(&lum);
-                let focus_score = media_core::detect_focus_blur(&img);
-
-                if let Ok(conn) = pool.get() {
-                    let _ = conn.execute(
-                        "INSERT OR REPLACE INTO visual_histograms (path, r_blob, g_blob, b_blob, lum_blob) VALUES (?, ?, ?, ?, ?)",
-                        rusqlite::params![path_buf.to_string_lossy(), r_bytes, g_bytes, b_bytes, lum_bytes],
-                    );
-                    let _ = conn.execute(
-                        "UPDATE image_metadata SET focus_score = ?1 WHERE path = ?2",
-                        rusqlite::params![focus_score, path_buf.to_string_lossy()],
-                    );
-                }
-            });
+        if let Ok(meta) = fs::metadata(&thumb_path) {
+            self.touch_thumbnail(&thumb_path, &meta);
         }
+
+        // Bound background analysis work so large warmups cannot create a thread burst.
+        let _ = histogram_queue().try_send(HistogramRequest {
+            pool: self.pool.clone(),
+            path: path.to_path_buf(),
+            thumbnail: thumb_path.clone(),
+            image: analysis_image,
+        });
         Ok(thumb_path)
     }
 
-    pub fn cache_visual_histogram(&self, path: &Path, thumb_path: &Path) -> Result<()> {
+    pub fn cache_visual_histogram(
+        &self,
+        path: &Path,
+        thumb_path: &Path,
+    ) -> Result<VisualHistogram> {
         let img = image::open(thumb_path)?;
         let (r, g, b, lum) = media_core::compute_histogram_from_image(&img);
         let r_bytes = u32_vec_to_u8_vec(&r);
@@ -899,7 +1297,7 @@ impl LibraryCache {
             rusqlite::params![focus_score, path.to_string_lossy()],
         )?;
         self.schedule_flush();
-        Ok(())
+        Ok((r, g, b, lum))
     }
 
     pub fn get_visual_histogram(&self, path: &Path) -> Result<Option<VisualHistogram>> {
@@ -931,9 +1329,15 @@ impl LibraryCache {
     }
 
     pub fn ensure_decoded(&self, path: &Path) -> Result<PathBuf> {
-        let fingerprint = image_fingerprint(path)?;
+        let (fingerprint, _) = self.image_fingerprint(path)?;
         let cached = self.decoded_dir.join(format!("{fingerprint}.jpg"));
-        if cached.exists() {
+        if let Ok(meta) = fs::metadata(&cached) {
+            self.touch_decoded(&cached, &meta);
+            return Ok(cached);
+        }
+        let _in_flight = InFlightGuard::acquire(&self.decoded_in_flight, &cached);
+        if let Ok(meta) = fs::metadata(&cached) {
+            self.touch_decoded(&cached, &meta);
             return Ok(cached);
         }
         let tmp_path = cached.with_extension("tmp");
@@ -943,7 +1347,7 @@ impl LibraryCache {
                 .with_context(|| format!("native sips decode failed for {}", path.display()))?;
         } else {
             let img = media_core::open_image(path)?;
-            let img = media_core::apply_exif_orientation(&img, path);
+            let img = media_core::apply_exif_orientation(img, path);
             let rgb8 = img.to_rgb8();
             let mut file = std::fs::File::create(&tmp_path).with_context(|| {
                 format!(
@@ -959,6 +1363,9 @@ impl LibraryCache {
 
         std::fs::rename(&tmp_path, &cached)
             .with_context(|| format!("failed to finalize decoded image: {}", cached.display()))?;
+        if let Ok(meta) = fs::metadata(&cached) {
+            self.touch_decoded(&cached, &meta);
+        }
         Ok(cached)
     }
 
@@ -1017,7 +1424,23 @@ impl LibraryCache {
 
     /// Drop oldest decoded cache files until total size is under `limit_bytes`.
     pub fn prune_decoded_to_limit(&self, limit_bytes: u64) -> u64 {
-        prune_dir_lru(&self.decoded_dir, limit_bytes)
+        let (removed, paths) = prune_cache_files(&self.decoded_files, limit_bytes);
+        self.remove_persisted_cache_paths(&paths);
+        removed
+    }
+
+    fn image_fingerprint(&self, path: &Path) -> Result<(String, i64)> {
+        let stamp = modified_secs(path)?;
+        let mut fingerprints = self.fingerprints.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_stamp, fingerprint)) = fingerprints.get(path)
+            && *cached_stamp == stamp
+        {
+            return Ok((fingerprint.clone(), stamp));
+        }
+        let key = format!("{}::{stamp}_v3", path.to_string_lossy());
+        let fingerprint = blake3::hash(key.as_bytes()).to_hex().to_string();
+        fingerprints.insert(path.to_path_buf(), (stamp, fingerprint.clone()));
+        Ok((fingerprint, stamp))
     }
 }
 
@@ -1064,37 +1487,30 @@ impl Drop for LibraryCache {
         self.shutdown
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // Trigger a final mirror backup to disk via copy_db & wal_checkpoint
-        if let Ok(mem_conn) = self.conn()
-            && let Ok(mut disk_conn) = rusqlite::Connection::open(&self.db_path)
-        {
-            if let Err(e) = copy_db(&mem_conn, &mut disk_conn) {
-                eprintln!("Final Drop mirror backup failed: {:?}", e);
-            } else {
-                let _ = disk_conn.execute_batch(
-                    "PRAGMA wal_checkpoint(PASSIVE);
-                         PRAGMA incremental_vacuum(50);",
-                );
-            }
+        // Persist queued WAL pages before shutdown.
+        if let Ok(conn) = self.conn() {
+            let _ = conn.execute_batch(
+                "PRAGMA wal_checkpoint(PASSIVE);
+                 PRAGMA incremental_vacuum(50);",
+            );
         }
     }
 }
 
 fn modified_secs(path: &Path) -> Result<i64> {
-    let modified = fs::metadata(path)?
-        .modified()
-        .with_context(|| format!("missing modified time for {}", path.display()))?;
-    let secs = modified
-        .duration_since(UNIX_EPOCH)
-        .with_context(|| format!("invalid modified time for {}", path.display()))?
-        .as_secs();
-    Ok(secs as i64)
+    let metadata = fs::metadata(path)?;
+    metadata_modified_secs(&metadata)
+        .map(|secs| secs as i64)
+        .with_context(|| format!("invalid modified time for {}", path.display()))
 }
 
-fn image_fingerprint(path: &Path) -> Result<String> {
-    let stamp = modified_secs(path)?;
-    let key = format!("{}::{stamp}_v3", path.to_string_lossy());
-    Ok(blake3::hash(key.as_bytes()).to_hex().to_string())
+fn metadata_modified_secs(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
 }
 
 fn parse_image_format(name: &str) -> Option<image::ImageFormat> {
@@ -1127,5 +1543,40 @@ mod tests {
         assert!(index.is_empty());
         assert_eq!(index.len(), 0);
         assert_eq!(index.root, Path::new(""));
+    }
+
+    #[test]
+    fn index_upsert_and_remove_keep_positions_current() {
+        let item = |path: &str, width| LibraryItem {
+            path: PathBuf::from(path),
+            metadata: ImageMetadata {
+                width,
+                height: 100,
+                orientation: 1,
+                format: Some(image::ImageFormat::Jpeg),
+                exif: None,
+                focus_score: None,
+            },
+            is_video: false,
+            size: 10,
+            modified: 20,
+        };
+        let mut index = LibraryIndex::new(PathBuf::from("/tmp"), vec![item("/tmp/a.jpg", 100)]);
+        index.upsert(item("/tmp/b.jpg", 200));
+        index.upsert(item("/tmp/a.jpg", 300));
+        assert_eq!(
+            index
+                .get(Path::new("/tmp/a.jpg"))
+                .map(|item| item.metadata.width),
+            Some(300)
+        );
+        assert!(index.remove(Path::new("/tmp/a.jpg")));
+        assert_eq!(
+            index
+                .get(Path::new("/tmp/b.jpg"))
+                .map(|item| item.metadata.width),
+            Some(200)
+        );
+        assert!(!index.remove(Path::new("/tmp/missing.jpg")));
     }
 }

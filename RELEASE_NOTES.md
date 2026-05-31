@@ -1,3 +1,23 @@
+# Folio v1.3.2
+
+Improves backend throughput and responsiveness across indexing, metadata inspection, thumbnail generation, cache reuse, and vault I/O. Also restores raw-image metadata inspection and fixes viewer card animations during the first navigation pass.
+
+## Highlights
+
+- Deduplicates concurrent thumbnail and decoded-image work while reusing cached file metadata.
+- Reduces indexing and startup filesystem calls, avoids unnecessary SQLite rereads, and keeps WAL work off initial load.
+- Streams vault encryption and decryption in authenticated chunks instead of buffering entire files.
+- Hydrates inspector metadata lazily, including Spotlight fallback for raw image formats.
+- Fixes viewer card animation state when navigating a newly opened folder.
+
+## Verification
+
+- `cargo test --workspace --no-fail-fast`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `npm run build --prefix frontend`
+
+---
+
 # Folio v1.3.1
 
 Restores instant arrow-key navigation: reuses preloaded full-res images, skips decode/animation delays when moving quickly, and widens the preload window.

@@ -20,6 +20,7 @@ import { initA11y } from './modules/a11y.js';
 
 /* ── State ── */
 let items = [];
+const metadataHydrationKeys = new Set();
 let idx = 0;
 let zoom = 1;
 let panX = 0, panY = 0;
@@ -1042,6 +1043,29 @@ const editMap = new Map();
 const preloadedThumbs = new Map();
 const preloadCache = new Map();
 const videoPreloadCache = new Map();
+
+function videoMimeType(path) {
+  const ext = (path.split('.').pop() || '').toLowerCase();
+  if (ext === 'webm') return 'video/webm';
+  if (ext === 'mkv') return 'video/x-matroska';
+  if (ext === 'avi') return 'video/x-msvideo';
+  return 'video/mp4';
+}
+
+function folioMediaUrl(path) {
+  return `folio://localhost/${encodeURIComponent(path)}`;
+}
+
+/** WebKit needs an explicit MIME on <source>; .mov as quicktime often fails on custom schemes. */
+function setVideoSource(video, path, query = '') {
+  const src = folioMediaUrl(path) + query;
+  video.innerHTML = '';
+  const source = document.createElement('source');
+  source.src = src;
+  source.type = videoMimeType(path);
+  video.appendChild(source);
+  video.load();
+}
 
 // Geocoding Cache & Service
 const geocodeCache = new Map();
@@ -2147,7 +2171,7 @@ function preloadVideo(item) {
   v.playsInline = true;
   v.setAttribute('playsinline', '');
   v.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none;left:-9999px';
-  v.src = `folio://localhost/${encodeURIComponent(item.path)}`;
+  setVideoSource(v, item.path);
   document.body.appendChild(v);
   videoPreloadCache.set(item.path, v);
 }
@@ -2259,7 +2283,8 @@ function show(i, dir = null) {
     editSessionPath = null;
     removeEditPreview();
   }
-  const src = `folio://localhost/${encodeURIComponent(item.path)}`, outgoing = media.querySelector('.media-layer.media-active');
+  const src = folioMediaUrl(item.path);
+  const outgoing = media.querySelector('.media-layer.media-active');
   if (outgoing) {
     if (rapidNav) {
       outgoing.remove();
@@ -2297,16 +2322,25 @@ function show(i, dir = null) {
     v.autoplay = true; v.loop = true; v.playsInline = true;
     const warmed = videoPreloadCache.get(item.path);
     if (warmed && warmed.readyState >= 2) {
-      v.src = warmed.currentSrc || warmed.src;
+      const warmedSrc = warmed.currentSrc || warmed.querySelector('source')?.src || warmed.src;
+      if (warmedSrc) {
+        v.innerHTML = '';
+        const source = document.createElement('source');
+        source.src = warmedSrc;
+        source.type = videoMimeType(item.path);
+        v.appendChild(source);
+        v.load();
+      } else {
+        setVideoSource(v, item.path);
+      }
     } else {
-      v.src = src;
+      setVideoSource(v, item.path);
     }
 
     v.onerror = () => {
       viewer.classList.remove('loading');
       renderMediaError(layer, item, () => {
-        v.src = '';
-        v.src = src + '?retry=' + Date.now();
+        setVideoSource(v, item.path, `?retry=${Date.now()}`);
       });
     };
 
@@ -2425,7 +2459,7 @@ function show(i, dir = null) {
       const v = document.createElement('video');
       v.className = 'live-video-player';
       v.muted = true; v.loop = true; v.playsInline = true;
-      v.src = `folio://localhost/${encodeURIComponent(item.livePhotoVideoPath)}`;
+      setVideoSource(v, item.livePhotoVideoPath);
       layer.appendChild(v);
 
       const badge = document.createElement('div');
@@ -2485,6 +2519,19 @@ function show(i, dir = null) {
   badge.textContent = (item.path.split('.').pop() || '').toUpperCase();
   badge.className = `format-badge fmt-${badge.textContent.toLowerCase()}`;
   
+  renderInspectorMetadata(item);
+
+  highlightThumb();
+  updateViewerToolbar();
+  document.querySelectorAll('.catalog-card').forEach((card) => {
+    card.classList.toggle('is-focused', card.dataset.path === items[idx]?.path);
+  });
+  closeCropMode();
+  removeEditPreview();
+  triggerPreload(i);
+}
+
+function renderInspectorMetadata(item) {
   if (item.exif) {
     edCamera.textContent = item.exif.camera || 'Unknown Camera';
     edAperture.textContent = item.exif.aperture || '—';
@@ -2544,15 +2591,23 @@ function show(i, dir = null) {
     edGps.style.display = 'none';
     if (edTechData) edTechData.style.display = 'none';
   }
-  
-  highlightThumb();
-  updateViewerToolbar();
-  document.querySelectorAll('.catalog-card').forEach((card) => {
-    card.classList.toggle('is-focused', card.dataset.path === items[idx]?.path);
-  });
-  closeCropMode();
-  removeEditPreview();
-  triggerPreload(i);
+  hydrateInspectorMetadata(item);
+}
+
+function hydrateInspectorMetadata(item) {
+  if (!item || item.exif || item.is_video) return;
+  const key = `${item.path}:${item.modified}`;
+  if (metadataHydrationKeys.has(key)) return;
+  metadataHydrationKeys.add(key);
+  invoke('get_media_metadata', { path: item.path })
+    .then((exif) => {
+      item.exif = exif;
+      if (exif && items[idx]?.path === item.path) renderInspectorMetadata(item);
+    })
+    .catch((e) => {
+      metadataHydrationKeys.delete(key);
+      console.error('Failed to hydrate media metadata:', e);
+    });
 }
 
 function hexToHSL(hex) {
@@ -3082,7 +3137,7 @@ async function applyEditPreview(edit) {
   clearTimeout(editDebounceTimer);
   editDebounceTimer = setTimeout(async () => {
     try {
-      const b64 = await invoke('edit_image', { path, edit });
+      const previewPath = await invoke('edit_image', { path, edit });
       if (!editPreviewImg) {
         editPreviewImg = document.createElement('img');
         editPreviewImg.crossOrigin = "anonymous";
@@ -3090,7 +3145,7 @@ async function applyEditPreview(edit) {
         editPreviewImg.style.cssText = 'position:absolute;inset:0;margin:auto;z-index:2;width:100%;height:100%;object-fit:contain;pointer-events:none;';
         layer.appendChild(editPreviewImg);
       }
-      editPreviewImg.src = 'data:image/jpeg;base64,' + b64;
+      editPreviewImg.src = `folio://localhost/${encodeURIComponent(previewPath)}?v=${Date.now()}`;
     } catch (e) { console.error(e); }
   }, 16);
 }
@@ -4867,7 +4922,7 @@ function renderCatalogChunk(startIndex, count) {
         .catch(() => {});
         
       card.addEventListener('mouseenter', () => {
-        if (!v.src) v.src = `folio://localhost/${encodeURIComponent(it.path)}`;
+        if (!v.querySelector('source')) setVideoSource(v, it.path);
         v.play().catch(()=>{});
       });
       card.addEventListener('mouseleave', () => {

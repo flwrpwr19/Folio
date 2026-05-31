@@ -1,7 +1,6 @@
 use crate::AppState;
 use image::GenericImageView;
 use media_core::{SimpleEdit, apply_edit};
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
@@ -11,7 +10,7 @@ use parking_lot::Mutex;
 use std::num::NonZeroUsize;
 
 pub struct ImageLruCache {
-    inner: Mutex<(LruCache<String, (image::DynamicImage, usize)>, usize)>,
+    inner: Mutex<(LruCache<String, (Arc<image::DynamicImage>, usize)>, usize)>,
     max_bytes: usize,
 }
 
@@ -43,14 +42,14 @@ impl ImageLruCache {
             }
         }
 
-        cache.put(key, (img, byte_size));
+        cache.put(key, (Arc::new(img), byte_size));
         *current += byte_size;
     }
 
-    pub fn get(&self, key: &str) -> Option<image::DynamicImage> {
+    pub fn get(&self, key: &str) -> Option<Arc<image::DynamicImage>> {
         let mut guard = self.inner.lock();
         let (ref mut cache, _) = *guard;
-        cache.get(key).map(|(img, _)| img.clone())
+        cache.get(key).map(|(img, _)| Arc::clone(img))
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
@@ -223,49 +222,50 @@ pub async fn prepare_edit_preview(
 
             image::open(&temp_preview).map_err(|e| e.to_string())?
         } else {
-            let source = {
-                if state_arc.decode_failures.lock().contains(&path) {
-                    return Err("Previous decode attempt failed for this file".to_string());
-                }
-                let ext = p
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                let native = matches!(
-                    ext.as_str(),
-                    "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
-                );
-                if native {
-                    p.clone()
-                } else {
-                    state_arc.cache.ensure_decoded(&p).map_err(|e| {
-                        state_arc.decode_failures.lock().insert(path.clone());
-                        e.to_string()
-                    })?
-                }
-            };
-
-            let mut img = media_core::open_image(&source).map_err(|e| e.to_string())?;
             let orientation = state_arc
                 .index
                 .read()
                 .as_ref()
-                .and_then(|idx| idx.items.iter().find(|it| it.path == p))
+                .and_then(|idx| idx.get(&p))
                 .map(|it| it.metadata.orientation)
                 .unwrap_or(1);
-            img = media_core::apply_orientation_value(img, orientation);
-
-            let (w, h) = img.dimensions();
-            let max_side = 1024;
-            let longest = w.max(h);
-            if longest > max_side {
-                let scale = max_side as f32 / longest as f32;
-                let nw = (w as f32 * scale).round() as u32;
-                let nh = (h as f32 * scale).round() as u32;
-                img = img.resize(nw, nh, image::imageops::FilterType::Triangle);
+            if state_arc.decode_failures.lock().contains(&path) {
+                return Err("Previous decode attempt failed for this file".to_string());
             }
-            img
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let native = matches!(
+                ext.as_str(),
+                "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
+            );
+            if native {
+                let decoded =
+                    media_core::decode_image_with_orientation(&p, Some(1024), orientation)
+                        .map_err(|e| e.to_string())?;
+                let rgba = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)
+                    .ok_or_else(|| "failed to construct edit preview".to_string())?;
+                image::DynamicImage::ImageRgba8(rgba)
+            } else {
+                let source = state_arc.cache.ensure_decoded(&p).map_err(|e| {
+                    state_arc.decode_failures.lock().insert(path.clone());
+                    e.to_string()
+                })?;
+                let mut img = media_core::open_image(&source).map_err(|e| e.to_string())?;
+
+                let (w, h) = img.dimensions();
+                let max_side = 1024;
+                let longest = w.max(h);
+                if longest > max_side {
+                    let scale = max_side as f32 / longest as f32;
+                    let nw = (w as f32 * scale).round() as u32;
+                    let nh = (h as f32 * scale).round() as u32;
+                    img = img.resize(nw, nh, image::imageops::FilterType::Triangle);
+                }
+                img
+            }
         };
 
         state_arc.preview_cache.insert(path, img);
@@ -293,14 +293,26 @@ pub async fn edit_image(
             .get(&path)
             .ok_or_else(|| "preview not prepared".to_string())?;
         let edited = apply_edit(&img, &edit);
-        let mut buf = Vec::new();
         let rgb = edited.into_rgb8();
-        let mut cursor = Cursor::new(&mut buf);
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
+        let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+        let preview_dir = base.join("folio-app").join("edit-previews");
+        std::fs::create_dir_all(&preview_dir).map_err(|e| e.to_string())?;
+        let preview_path =
+            preview_dir.join(format!("{}.jpg", blake3::hash(path.as_bytes()).to_hex()));
+        let tmp_path = preview_path.with_extension("tmp");
+        let mut file = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
         image::DynamicImage::ImageRgb8(rgb)
             .write_with_encoder(encoder)
-            .map_err(|e| e.to_string())?;
-        Ok::<String, String>(base64_encode(&buf))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                e.to_string()
+            })?;
+        std::fs::rename(&tmp_path, &preview_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            e.to_string()
+        })?;
+        Ok::<String, String>(preview_path.to_string_lossy().into_owned())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -424,7 +436,7 @@ pub async fn export_edited(
             .index
             .read()
             .as_ref()
-            .and_then(|idx| idx.items.iter().find(|it| it.path == p))
+            .and_then(|idx| idx.get(&p))
             .map(|it| it.metadata.orientation)
             .unwrap_or(1);
         img = media_core::apply_orientation_value(img, orientation);
@@ -507,9 +519,14 @@ pub async fn get_dominant_colors(
         return Ok(vec![]);
     }
     let state_arc = state.inner().clone();
+    let cache_state = state_arc.clone();
     let path_clone = path.clone();
     let colors = tauri::async_runtime::spawn_blocking(move || {
-        let img = media_core::open_image(&p).map_err(|e| e.to_string())?;
+        let thumb = cache_state
+            .cache
+            .ensure_thumbnail(&p, 320)
+            .map_err(|e| e.to_string())?;
+        let img = image::open(&thumb).map_err(|e| e.to_string())?;
         let colors = media_core::extract_dominant_colors(&img, 5);
         Ok::<Vec<String>, String>(colors)
     })
@@ -557,6 +574,7 @@ pub async fn get_folder_dominant_colors(
     }
 
     if !missing_paths.is_empty() {
+        let cache_state = state_arc.clone();
         let extracted: Vec<(String, Vec<String>)> =
             tauri::async_runtime::spawn_blocking(move || {
                 use rayon::prelude::*;
@@ -564,7 +582,9 @@ pub async fn get_folder_dominant_colors(
                     .into_par_iter()
                     .filter_map(|path_str| {
                         let p = std::path::PathBuf::from(&path_str);
-                        if let Ok(img) = media_core::open_image(&p) {
+                        if let Ok(thumb) = cache_state.cache.ensure_thumbnail(&p, 320)
+                            && let Ok(img) = image::open(thumb)
+                        {
                             let colors = media_core::extract_dominant_colors(&img, 5);
                             Some((path_str, colors))
                         } else {
@@ -584,6 +604,47 @@ pub async fn get_folder_dominant_colors(
     }
 
     Ok(results)
+}
+
+struct HammingNode {
+    hash: u64,
+    indices: Vec<usize>,
+    children: std::collections::HashMap<u32, HammingNode>,
+}
+
+impl HammingNode {
+    fn new(hash: u64, index: usize) -> Self {
+        Self {
+            hash,
+            indices: vec![index],
+            children: std::collections::HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, hash: u64, index: usize) {
+        let distance = (self.hash ^ hash).count_ones();
+        if distance == 0 {
+            self.indices.push(index);
+        } else if let Some(child) = self.children.get_mut(&distance) {
+            child.insert(hash, index);
+        } else {
+            self.children.insert(distance, Self::new(hash, index));
+        }
+    }
+
+    fn search(&self, hash: u64, radius: u32, matches: &mut Vec<usize>) {
+        let distance = (self.hash ^ hash).count_ones();
+        if distance <= radius {
+            matches.extend(&self.indices);
+        }
+        let min_distance = distance.saturating_sub(radius);
+        let max_distance = distance.saturating_add(radius);
+        for (&edge, child) in &self.children {
+            if (min_distance..=max_distance).contains(&edge) {
+                child.search(hash, radius, matches);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -674,6 +735,14 @@ pub async fn find_visual_duplicates(
         .unwrap_or(Err("Task failed".to_string()));
 
     let hashes = result?;
+    let mut tree: Option<HammingNode> = None;
+    for (index, (_, hash)) in hashes.iter().enumerate() {
+        if let Some(root) = &mut tree {
+            root.insert(*hash, index);
+        } else {
+            tree = Some(HammingNode::new(*hash, index));
+        }
+    }
     let mut grouped = Vec::new();
     let mut processed = std::collections::HashSet::new();
 
@@ -685,15 +754,19 @@ pub async fn find_visual_duplicates(
         let mut current_group = vec![hashes[i].0.clone()];
         processed.insert(i);
 
-        for j in (i + 1)..hashes.len() {
+        let mut candidates = Vec::new();
+        if let Some(root) = &tree {
+            root.search(hashes[i].1, 10, &mut candidates);
+        }
+        for j in candidates {
+            if j <= i {
+                continue;
+            }
             if processed.contains(&j) {
                 continue;
             }
-            let diff = (hashes[i].1 ^ hashes[j].1).count_ones();
-            if diff <= 10 {
-                current_group.push(hashes[j].0.clone());
-                processed.insert(j);
-            }
+            current_group.push(hashes[j].0.clone());
+            processed.insert(j);
         }
         if current_group.len() > 1 {
             grouped.push(current_group);
@@ -857,42 +930,6 @@ pub async fn prefetch_decoded_media(
     Ok(())
 }
 
-fn base64_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 {
-            chunk[1] as usize
-        } else {
-            0
-        };
-        let b2 = if chunk.len() > 2 {
-            chunk[2] as usize
-        } else {
-            0
-        };
-        let _ = write!(
-            out,
-            "{}{}{}{}",
-            CHARS[b0 >> 2] as char,
-            CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char,
-            if chunk.len() > 1 {
-                CHARS[((b1 & 0xf) << 2) | (b2 >> 6)] as char
-            } else {
-                '='
-            },
-            if chunk.len() > 2 {
-                CHARS[b2 & 0x3f] as char
-            } else {
-                '='
-            },
-        );
-    }
-    out
-}
-
 #[derive(serde::Serialize)]
 pub struct UiHistogram {
     pub r: Vec<u32>,
@@ -900,6 +937,24 @@ pub struct UiHistogram {
     pub b: Vec<u32>,
     pub lum: Vec<u32>,
     pub peak: u32,
+}
+
+fn ui_histogram((r, g, b, lum): library_core::VisualHistogram) -> UiHistogram {
+    let peak = r
+        .iter()
+        .chain(g.iter())
+        .chain(b.iter())
+        .chain(lum.iter())
+        .copied()
+        .max()
+        .unwrap_or(0);
+    UiHistogram {
+        r: r.to_vec(),
+        g: g.to_vec(),
+        b: b.to_vec(),
+        lum: lum.to_vec(),
+        peak,
+    }
 }
 
 #[tauri::command]
@@ -915,23 +970,7 @@ pub async fn get_visual_histogram(
     tauri::async_runtime::spawn_blocking(move || {
         let p = PathBuf::from(&path);
         match state_arc.cache.get_visual_histogram(&p) {
-            Ok(Some((r, g, b, lum))) => {
-                let peak = r
-                    .iter()
-                    .chain(g.iter())
-                    .chain(b.iter())
-                    .chain(lum.iter())
-                    .cloned()
-                    .max()
-                    .unwrap_or(0);
-                Ok(Some(UiHistogram {
-                    r: r.to_vec(),
-                    g: g.to_vec(),
-                    b: b.to_vec(),
-                    lum: lum.to_vec(),
-                    peak,
-                }))
-            }
+            Ok(Some(histogram)) => Ok(Some(ui_histogram(histogram))),
             Ok(None) => {
                 // If it doesn't exist, try to compute it from the thumbnail if it exists
                 let max_side = 320;
@@ -940,23 +979,8 @@ pub async fn get_visual_histogram(
                     .thumbnail_path(&p, max_side)
                     .unwrap_or_default();
                 if thumb_path.exists() {
-                    let _ = state_arc.cache.cache_visual_histogram(&p, &thumb_path);
-                    if let Ok(Some((r, g, b, lum))) = state_arc.cache.get_visual_histogram(&p) {
-                        let peak = r
-                            .iter()
-                            .chain(g.iter())
-                            .chain(b.iter())
-                            .chain(lum.iter())
-                            .cloned()
-                            .max()
-                            .unwrap_or(0);
-                        return Ok(Some(UiHistogram {
-                            r: r.to_vec(),
-                            g: g.to_vec(),
-                            b: b.to_vec(),
-                            lum: lum.to_vec(),
-                            peak,
-                        }));
+                    if let Ok(histogram) = state_arc.cache.cache_visual_histogram(&p, &thumb_path) {
+                        return Ok(Some(ui_histogram(histogram)));
                     }
                 }
                 Ok(None)
@@ -966,4 +990,20 @@ pub async fn get_visual_histogram(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HammingNode;
+
+    #[test]
+    fn hamming_tree_returns_only_hashes_within_radius() {
+        let mut tree = HammingNode::new(0, 0);
+        tree.insert(0b11, 1);
+        tree.insert(u64::MAX, 2);
+        let mut matches = Vec::new();
+        tree.search(0, 2, &mut matches);
+        matches.sort_unstable();
+        assert_eq!(matches, vec![0, 1]);
+    }
 }

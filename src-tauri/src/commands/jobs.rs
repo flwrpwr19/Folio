@@ -1,12 +1,12 @@
 use crate::AppState;
 use library_core::rusqlite;
 use parking_lot::RwLock;
-use tauri::Emitter;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 use tauri::State;
 
 #[derive(Clone, Default)]
@@ -438,7 +438,7 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
                     }
                 }
                 let thumb_limit = *thread_state.thumbnail_cache_limit_bytes.read();
-                let _ = library_core::prune_dir_lru(thread_state.cache.thumb_dir(), thumb_limit);
+                let _ = thread_state.cache.prune_thumbnails_to_limit(thumb_limit);
                 let decode_limit = *thread_state.decoded_cache_limit_bytes.read();
                 thread_state.cache.prune_decoded_to_limit(decode_limit);
                 job_update(&thread_state, &thread_job_id, |s| {

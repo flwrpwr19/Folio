@@ -1,9 +1,10 @@
 use crate::AppState;
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use library_core::rusqlite;
 use parking_lot::RwLock;
 use rand::RngCore;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -12,11 +13,23 @@ use tauri::State;
 
 const KEYCHAIN_SERVICE: &str = "com.folio.app.vault";
 const DEFAULT_VAULT: &str = "Secure Album";
+const VAULT_V2_MAGIC: &[u8; 8] = b"FOLIOV2\0";
+const VAULT_CHUNK_SIZE: usize = 1024 * 1024;
+const VAULT_TAG_SIZE: usize = 16;
+
+struct TempFileGuard(PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 #[derive(Default)]
 pub struct VaultRuntime {
     unlocked_until: RwLock<Option<Instant>>,
     auto_lock_minutes: RwLock<u64>,
+    canonical_dir: RwLock<Option<PathBuf>>,
 }
 
 impl VaultRuntime {
@@ -24,6 +37,7 @@ impl VaultRuntime {
         Self {
             unlocked_until: RwLock::new(None),
             auto_lock_minutes: RwLock::new(5),
+            canonical_dir: RwLock::new(default_vault_dir().canonicalize().ok()),
         }
     }
 
@@ -49,6 +63,20 @@ impl VaultRuntime {
 
     pub fn auto_lock_minutes(&self) -> u64 {
         *self.auto_lock_minutes.read()
+    }
+
+    pub fn refresh_canonical_dir(&self) {
+        *self.canonical_dir.write() = default_vault_dir().canonicalize().ok();
+    }
+
+    pub fn contains_canonical_path(&self, path: &Path) -> bool {
+        if self.canonical_dir.read().is_none() {
+            self.refresh_canonical_dir();
+        }
+        self.canonical_dir
+            .read()
+            .as_ref()
+            .is_some_and(|vault| path.starts_with(vault))
     }
 }
 
@@ -202,18 +230,65 @@ fn vault_key() -> Result<[u8; 32], String> {
 }
 
 fn encrypt_file_to_vault(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<(), String> {
-    let bytes = std::fs::read(source).map_err(|e| format!("Failed to read source: {e}"))?;
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
-    let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), bytes.as_ref())
-        .map_err(|e| format!("Failed to encrypt file: {e}"))?;
     let tmp = dest.with_extension("vault-tmp");
-    let mut out = Vec::with_capacity(12 + ciphertext.len());
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext);
-    std::fs::write(&tmp, out).map_err(|e| format!("Failed to write encrypted file: {e}"))?;
+    let _tmp_guard = TempFileGuard(tmp.clone());
+    let input = std::fs::File::open(source).map_err(|e| format!("Failed to read source: {e}"))?;
+    let output =
+        std::fs::File::create(&tmp).map_err(|e| format!("Failed to write encrypted file: {e}"))?;
+    let mut reader = BufReader::new(input);
+    let mut writer = BufWriter::new(output);
+    writer
+        .write_all(VAULT_V2_MAGIC)
+        .map_err(|e| format!("Failed to write encrypted file: {e}"))?;
+    let mut chunk = vec![0u8; VAULT_CHUNK_SIZE];
+    let mut chunk_index = 0_u64;
+    loop {
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|e| format!("Failed to read source: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: &chunk[..read],
+                    aad: &chunk_index.to_le_bytes(),
+                },
+            )
+            .map_err(|e| format!("Failed to encrypt file: {e}"))?;
+        let ciphertext_len = u32::try_from(ciphertext.len())
+            .map_err(|_| "Encrypted vault chunk is too large".to_string())?;
+        writer
+            .write_all(&nonce_bytes)
+            .and_then(|_| writer.write_all(&ciphertext_len.to_le_bytes()))
+            .and_then(|_| writer.write_all(&ciphertext))
+            .map_err(|e| format!("Failed to write encrypted file: {e}"))?;
+        chunk_index += 1;
+    }
+    let mut terminal_nonce = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut terminal_nonce);
+    let terminal = cipher
+        .encrypt(
+            Nonce::from_slice(&terminal_nonce),
+            Payload {
+                msg: &[],
+                aad: &chunk_index.to_le_bytes(),
+            },
+        )
+        .map_err(|e| format!("Failed to encrypt file terminator: {e}"))?;
+    writer
+        .write_all(&terminal_nonce)
+        .and_then(|_| writer.write_all(&(terminal.len() as u32).to_le_bytes()))
+        .and_then(|_| writer.write_all(&terminal))
+        .map_err(|e| format!("Failed to write encrypted file terminator: {e}"))?;
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to write encrypted file: {e}"))?;
     std::fs::rename(&tmp, dest).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("Failed to finalize encrypted file: {e}")
@@ -221,6 +296,88 @@ fn encrypt_file_to_vault(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<(
 }
 
 fn decrypt_file_to_path(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let tmp = dest.with_extension("vault-export-tmp");
+    let _tmp_guard = TempFileGuard(tmp.clone());
+    let input =
+        std::fs::File::open(source).map_err(|e| format!("Failed to read vault item: {e}"))?;
+    let mut reader = BufReader::new(input);
+    let mut magic = [0u8; 8];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|e| format!("Failed to read vault item: {e}"))?;
+    if &magic == VAULT_V2_MAGIC {
+        decrypt_v2(&mut reader, &tmp, key)?;
+    } else {
+        decrypt_legacy(source, &tmp, key)?;
+    }
+    std::fs::rename(&tmp, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Failed to finalize export: {e}")
+    })
+}
+
+fn decrypt_v2(reader: &mut impl Read, dest: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
+    let output = std::fs::File::create(dest).map_err(|e| format!("Failed to write export: {e}"))?;
+    let mut writer = BufWriter::new(output);
+    let mut chunk_index = 0_u64;
+    loop {
+        let mut nonce_bytes = [0u8; 12];
+        let read = reader
+            .read(&mut nonce_bytes[..1])
+            .map_err(|e| format!("Failed to read vault chunk: {e}"))?;
+        if read == 0 {
+            return Err("Vault item ended before terminal marker".to_string());
+        }
+        reader
+            .read_exact(&mut nonce_bytes[1..])
+            .map_err(|e| format!("Failed to read vault chunk: {e}"))?;
+        let mut len_bytes = [0u8; 4];
+        reader
+            .read_exact(&mut len_bytes)
+            .map_err(|e| format!("Failed to read vault chunk length: {e}"))?;
+        let chunk_len = u32::from_le_bytes(len_bytes) as usize;
+        if chunk_len > VAULT_CHUNK_SIZE + 32 {
+            return Err("Encrypted vault chunk is too large".to_string());
+        }
+        let mut ciphertext = vec![0u8; chunk_len];
+        reader
+            .read_exact(&mut ciphertext)
+            .map_err(|e| format!("Failed to read vault chunk: {e}"))?;
+        let plaintext = cipher
+            .decrypt(
+                Nonce::from_slice(&nonce_bytes),
+                Payload {
+                    msg: ciphertext.as_ref(),
+                    aad: &chunk_index.to_le_bytes(),
+                },
+            )
+            .map_err(|e| format!("Failed to decrypt vault chunk: {e}"))?;
+        if chunk_len == VAULT_TAG_SIZE {
+            if !plaintext.is_empty() {
+                return Err("Vault item has an invalid terminal marker".to_string());
+            }
+            let mut trailing = [0_u8; 1];
+            if reader
+                .read(&mut trailing)
+                .map_err(|e| format!("Failed to read vault item terminator: {e}"))?
+                != 0
+            {
+                return Err("Vault item has trailing data".to_string());
+            }
+            break;
+        }
+        writer
+            .write_all(&plaintext)
+            .map_err(|e| format!("Failed to write export: {e}"))?;
+        chunk_index += 1;
+    }
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to write export: {e}"))
+}
+
+fn decrypt_legacy(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<(), String> {
     let bytes = std::fs::read(source).map_err(|e| format!("Failed to read vault item: {e}"))?;
     if bytes.len() < 13 {
         return Err("Vault item is too small to decrypt".to_string());
@@ -229,12 +386,7 @@ fn decrypt_file_to_path(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<()
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&bytes[..12]), &bytes[12..])
         .map_err(|e| format!("Failed to decrypt vault item: {e}"))?;
-    let tmp = dest.with_extension("vault-export-tmp");
-    std::fs::write(&tmp, plaintext).map_err(|e| format!("Failed to write export: {e}"))?;
-    std::fs::rename(&tmp, dest).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("Failed to finalize export: {e}")
-    })
+    std::fs::write(dest, plaintext).map_err(|e| format!("Failed to write export: {e}"))
 }
 
 pub fn vault_add_files_sync(
@@ -258,6 +410,7 @@ pub fn vault_add_files_sync(
         result.push_error(format!("Failed to create vault dir: {e}"));
         return result;
     }
+    state.vault.refresh_canonical_dir();
 
     let conn = match state.cache.conn() {
         Ok(conn) => conn,
@@ -321,7 +474,9 @@ pub fn vault_export_files_sync(
         return result;
     }
     if is_vault_path(&dest_dir) {
-        result.push_error("Cannot export vault items into the Secure Album storage folder".to_string());
+        result.push_error(
+            "Cannot export vault items into the Secure Album storage folder".to_string(),
+        );
         return result;
     }
     let key = match vault_key() {
@@ -385,6 +540,7 @@ pub async fn vault_create(
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::create_dir_all(default_vault_dir()).map_err(|e| e.to_string())?;
+        state_arc.vault.refresh_canonical_dir();
         let _ = vault_key()?;
         let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
         let count: i64 = conn
@@ -426,7 +582,10 @@ pub struct VaultRepairResult {
 }
 
 #[tauri::command]
-pub async fn vault_set_auto_lock(minutes: u64, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+pub async fn vault_set_auto_lock(
+    minutes: u64,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
     if !(1..=120).contains(&minutes) {
         return Err("Auto-lock must be between 1 and 120 minutes".to_string());
     }
@@ -438,7 +597,9 @@ pub async fn vault_set_auto_lock(minutes: u64, state: State<'_, Arc<AppState>>) 
 }
 
 #[tauri::command]
-pub async fn vault_repair_catalog(state: State<'_, Arc<AppState>>) -> Result<VaultRepairResult, String> {
+pub async fn vault_repair_catalog(
+    state: State<'_, Arc<AppState>>,
+) -> Result<VaultRepairResult, String> {
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         ensure_vault_unlocked(&state_arc)?;
@@ -457,8 +618,11 @@ pub async fn vault_repair_catalog(state: State<'_, Arc<AppState>>) -> Result<Vau
 
         for (id, encrypted_path) in rows {
             if !Path::new(&encrypted_path).exists() {
-                conn.execute("DELETE FROM vault_items WHERE id = ?", rusqlite::params![id])
-                    .map_err(|e| e.to_string())?;
+                conn.execute(
+                    "DELETE FROM vault_items WHERE id = ?",
+                    rusqlite::params![id],
+                )
+                .map_err(|e| e.to_string())?;
                 removed_rows += 1;
             }
         }
@@ -473,13 +637,18 @@ pub async fn vault_repair_catalog(state: State<'_, Arc<AppState>>) -> Result<Vau
 
         let vault_dir = default_vault_dir();
         if vault_dir.exists() {
-            for entry in std::fs::read_dir(&vault_dir).map_err(|e| e.to_string())?.flatten() {
+            for entry in std::fs::read_dir(&vault_dir)
+                .map_err(|e| e.to_string())?
+                .flatten()
+            {
                 let path = entry.path();
                 if !path.is_file() {
                     continue;
                 }
                 let key = path.to_string_lossy().to_string();
-                if !known.contains(&key) && path.extension().and_then(|e| e.to_str()) == Some("folio-vault") {
+                if !known.contains(&key)
+                    && path.extension().and_then(|e| e.to_str()) == Some("folio-vault")
+                {
                     if std::fs::remove_file(&path).is_ok() {
                         removed_files += 1;
                     }
@@ -516,11 +685,17 @@ pub async fn vault_export_files(
 
 #[cfg(test)]
 mod tests {
-    use super::{decrypt_file_to_path, encrypt_file_to_vault};
+    use super::{VAULT_CHUNK_SIZE, decrypt_file_to_path, encrypt_file_to_vault};
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Nonce};
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("folio_vault_test_{}_{}", std::process::id(), name))
+    }
 
     #[test]
     fn encrypt_decrypt_round_trip() {
-        let base = std::env::temp_dir().join(format!("folio_vault_test_{}", std::process::id()));
+        let base = test_dir("small");
         if let Err(e) = std::fs::create_dir_all(&base) {
             panic!("failed to create test dir: {e}");
         }
@@ -543,5 +718,125 @@ mod tests {
         };
         let _ = std::fs::remove_dir_all(&base);
         assert_eq!(data, b"secret-data");
+    }
+
+    #[test]
+    fn encrypt_decrypt_multi_chunk_round_trip() {
+        let base = test_dir("large");
+        if let Err(e) = std::fs::create_dir_all(&base) {
+            panic!("failed to create test dir: {e}");
+        }
+        let source = base.join("source.bin");
+        let encrypted = base.join("item.vault");
+        let output = base.join("output.bin");
+        let key = [11u8; 32];
+        let data = vec![42u8; VAULT_CHUNK_SIZE * 2 + 37];
+        if let Err(e) = std::fs::write(&source, &data) {
+            panic!("failed to write source: {e}");
+        }
+        if let Err(e) = encrypt_file_to_vault(&source, &encrypted, &key) {
+            panic!("encrypt failed: {e}");
+        }
+        if let Err(e) = decrypt_file_to_path(&encrypted, &output, &key) {
+            panic!("decrypt failed: {e}");
+        }
+        let restored = match std::fs::read(&output) {
+            Ok(data) => data,
+            Err(e) => panic!("read output failed: {e}"),
+        };
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(restored, data);
+    }
+
+    #[test]
+    fn decrypts_legacy_vault_item() {
+        let base = test_dir("legacy");
+        if let Err(e) = std::fs::create_dir_all(&base) {
+            panic!("failed to create test dir: {e}");
+        }
+        let encrypted = base.join("legacy.vault");
+        let output = base.join("output.txt");
+        let key = [13u8; 32];
+        let nonce = [5u8; 12];
+        let cipher = match Aes256Gcm::new_from_slice(&key) {
+            Ok(cipher) => cipher,
+            Err(e) => panic!("failed to construct cipher: {e}"),
+        };
+        let ciphertext = match cipher.encrypt(Nonce::from_slice(&nonce), b"legacy-data".as_ref()) {
+            Ok(ciphertext) => ciphertext,
+            Err(e) => panic!("failed to encrypt legacy data: {e}"),
+        };
+        let mut bytes = nonce.to_vec();
+        bytes.extend(ciphertext);
+        if let Err(e) = std::fs::write(&encrypted, bytes) {
+            panic!("failed to write legacy item: {e}");
+        }
+        if let Err(e) = decrypt_file_to_path(&encrypted, &output, &key) {
+            panic!("legacy decrypt failed: {e}");
+        }
+        let restored = match std::fs::read(&output) {
+            Ok(data) => data,
+            Err(e) => panic!("read output failed: {e}"),
+        };
+        let _ = std::fs::remove_dir_all(&base);
+        assert_eq!(restored, b"legacy-data");
+    }
+
+    #[test]
+    fn rejects_vault_item_without_authenticated_terminal() {
+        let base = test_dir("truncated");
+        if let Err(e) = std::fs::create_dir_all(&base) {
+            panic!("failed to create test dir: {e}");
+        }
+        let source = base.join("source.txt");
+        let encrypted = base.join("item.vault");
+        let output = base.join("output.txt");
+        let key = [17u8; 32];
+        if let Err(e) = std::fs::write(&source, b"secret-data") {
+            panic!("failed to write source: {e}");
+        }
+        if let Err(e) = encrypt_file_to_vault(&source, &encrypted, &key) {
+            panic!("encrypt failed: {e}");
+        }
+        let mut bytes = match std::fs::read(&encrypted) {
+            Ok(bytes) => bytes,
+            Err(e) => panic!("read encrypted item failed: {e}"),
+        };
+        bytes.truncate(bytes.len() - 32);
+        if let Err(e) = std::fs::write(&encrypted, bytes) {
+            panic!("failed to truncate encrypted item: {e}");
+        }
+        assert!(decrypt_file_to_path(&encrypted, &output, &key).is_err());
+        assert!(!output.with_extension("vault-export-tmp").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_vault_item_with_trailing_data() {
+        let base = test_dir("trailing");
+        if let Err(e) = std::fs::create_dir_all(&base) {
+            panic!("failed to create test dir: {e}");
+        }
+        let source = base.join("source.txt");
+        let encrypted = base.join("item.vault");
+        let output = base.join("output.txt");
+        let key = [19u8; 32];
+        if let Err(e) = std::fs::write(&source, b"secret-data") {
+            panic!("failed to write source: {e}");
+        }
+        if let Err(e) = encrypt_file_to_vault(&source, &encrypted, &key) {
+            panic!("encrypt failed: {e}");
+        }
+        let mut bytes = match std::fs::read(&encrypted) {
+            Ok(bytes) => bytes,
+            Err(e) => panic!("read encrypted item failed: {e}"),
+        };
+        bytes.push(0);
+        if let Err(e) = std::fs::write(&encrypted, bytes) {
+            panic!("failed to append encrypted item: {e}");
+        }
+        assert!(decrypt_file_to_path(&encrypted, &output, &key).is_err());
+        assert!(!output.with_extension("vault-export-tmp").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

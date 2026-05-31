@@ -91,11 +91,11 @@ pub async fn get_storage_diagnostics(
 
         let cache_dir = state_arc.cache.thumb_dir();
         let cache_path = cache_dir.to_string_lossy().into_owned();
-        let cache_size = get_dir_size(cache_dir);
+        let cache_size = state_arc.cache.thumbnail_cache_size();
 
         let decoded_dir = state_arc.cache.decoded_dir();
         let decoded_path = decoded_dir.to_string_lossy().into_owned();
-        let decoded_size = get_dir_size(decoded_dir);
+        let decoded_size = state_arc.cache.decoded_cache_size();
 
         let (memory_used_kb, cpu_used_pct) = get_process_stats();
 
@@ -148,7 +148,7 @@ pub async fn prune_thumbnail_cache(
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let limit = *state_arc.thumbnail_cache_limit_bytes.read();
-        let removed = library_core::prune_dir_lru(state_arc.cache.thumb_dir(), limit);
+        let removed = state_arc.cache.prune_thumbnails_to_limit(limit);
         state_arc.resolved_thumbs.lock().clear();
         Ok::<u64, String>(removed)
     })
@@ -218,7 +218,8 @@ pub fn clear_directory(dir: &Path) -> (u64, Vec<String>) {
 
 fn checkpoint_metadata_db(state_arc: &std::sync::Arc<AppState>) {
     if let Ok(conn) = state_arc.cache.conn() {
-        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(20);");
+        let _ =
+            conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA incremental_vacuum(20);");
     }
     state_arc.cache.schedule_flush();
 }
@@ -235,7 +236,9 @@ fn clear_metadata_index(state_arc: &std::sync::Arc<AppState>) -> Result<Vec<Stri
     Ok(warnings)
 }
 
-fn reset_user_library_metadata(state_arc: &std::sync::Arc<AppState>) -> Result<Vec<String>, String> {
+fn reset_user_library_metadata(
+    state_arc: &std::sync::Arc<AppState>,
+) -> Result<Vec<String>, String> {
     let mut warnings = Vec::new();
     let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
     for table in [
@@ -305,6 +308,7 @@ pub async fn clear_thumbnail_cache(
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (bytes_freed, warnings) = clear_directory(state_arc.cache.thumb_dir());
+        state_arc.cache.reset_thumbnail_inventory();
         state_arc.resolved_thumbs.lock().clear();
         state_arc.thumb_failures.lock().clear();
         Ok(CacheClearResult {
@@ -324,6 +328,7 @@ pub async fn clear_decoded_cache(
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (bytes_freed, warnings) = clear_directory(state_arc.cache.decoded_dir());
+        state_arc.cache.reset_decoded_inventory();
         state_arc.preview_cache.clear();
         state_arc.decode_failures.lock().clear();
         Ok(CacheClearResult {
@@ -390,12 +395,16 @@ pub async fn clear_decode_failures(
 }
 
 #[tauri::command]
-pub async fn purge_cache(state: State<'_, std::sync::Arc<AppState>>) -> Result<CacheClearResult, String> {
+pub async fn purge_cache(
+    state: State<'_, std::sync::Arc<AppState>>,
+) -> Result<CacheClearResult, String> {
     let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut warnings = clear_metadata_index(&state_arc).unwrap_or_else(|e| vec![e]);
         let (thumb_freed, thumb_warn) = clear_directory(state_arc.cache.thumb_dir());
         let (decoded_freed, decoded_warn) = clear_directory(state_arc.cache.decoded_dir());
+        state_arc.cache.reset_thumbnail_inventory();
+        state_arc.cache.reset_decoded_inventory();
         warnings.extend(thumb_warn);
         warnings.extend(decoded_warn);
         reset_in_memory_cache(&state_arc);
