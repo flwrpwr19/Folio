@@ -9,6 +9,7 @@ Improves backend throughput and responsiveness across indexing, metadata inspect
 - Streams vault encryption and decryption in authenticated chunks instead of buffering entire files.
 - Hydrates inspector metadata lazily, including Spotlight fallback for raw image formats.
 - Fixes viewer card animation state when navigating a newly opened folder.
+- Refreshes the macOS installer artwork and README banner with a quieter minimal design.
 
 ## Verification
 
