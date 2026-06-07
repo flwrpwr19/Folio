@@ -98,6 +98,10 @@ export function clearStoredRecentLibraryPaths() {
   localStorage.removeItem(RECENT_PATHS_KEY);
 }
 
+export function clearLibrarySummaries() {
+  localStorage.removeItem(SUMMARY_KEY);
+}
+
 /** Merge Tauri recents, local path history, and summaries (newest summary first). */
 export function mergeRecentLibraryPaths(backendPaths = []) {
   const summaries = getLibrarySummaries();

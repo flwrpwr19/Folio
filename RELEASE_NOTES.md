@@ -8,6 +8,8 @@ Folio v1.4.0 is a major workflow, performance, and interface release. It redesig
 - Redesigned the photo viewport with a persistent filmstrip/action dock and cleaner top chrome.
 - Restored drag-and-drop opening for folders and media files.
 - Made viewport image switching much faster by reducing transition cost, widening preload coverage, and deferring noncritical image analysis work.
+- Fixed filmstrip thumbnail loading so visible thumbnail windows and look-ahead ranges are eagerly warmed instead of stalling at virtualized page boundaries.
+- Fixed home recent clearing so backend recents, local recent paths, and cached library summaries are all cleared together.
 - Added the upgraded map workspace with geotagged clusters, preview pins, focused location trays, map filters, and a real Carto Dark default map style.
 - Refined settings and inspector workspaces for clearer cache, privacy, metadata, and edit controls.
 - Fixed rotation preview rendering so geometric edits replace the image cleanly instead of overlaying a rotated copy.

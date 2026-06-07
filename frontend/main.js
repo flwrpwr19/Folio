@@ -11,7 +11,7 @@ import {
   formatHomePath, folderDisplayName, getLibrarySummary, getLibrarySummaries, saveLibrarySummary,
   patchLibrarySummary,
   mergeRecentLibraryPaths, pushRecentLibraryPath, clearStoredRecentLibraryPaths,
-  getStoredRecentLibraryPaths, ensureLibrarySummaryStub,
+  clearLibrarySummaries, getStoredRecentLibraryPaths, ensureLibrarySummaryStub,
 } from './modules/home.js';
 import { analyzeDuplicateGroup } from './modules/duplicates.js';
 import { renderEmptyState, clearEmptyState, setInlineStatus } from './modules/empty-states.js';
@@ -32,6 +32,7 @@ import {
   isFilmstripVisible,
   setFilmstripVisible,
   filmstripWindowRange,
+  FILMSTRIP_WINDOW_RADIUS,
   FILMSTRIP_THUMB_STEP_PX,
 } from './modules/viewer-workspace.js';
 import {
@@ -2844,6 +2845,8 @@ async function clearAllRecents() {
   try {
     if (hasTauriRuntime()) await invoke('clear_recent_folders');
     clearStoredRecentLibraryPaths();
+    clearLibrarySummaries();
+    homeRecentsBootComplete = true;
     await renderHomeHub({ syncFromSummaries: false, recentsSource: 'backend-only' });
     showToast('Recent folders cleared');
   } catch (e) {
@@ -4039,13 +4042,15 @@ async function updateAdaptiveGlow(el) {
 }
 
 /* ── Filmstrip ── */
-const THUMB_CONCURRENCY = Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4));
+const THUMB_CONCURRENCY = Math.min(16, Math.max(8, navigator.hardwareConcurrency || 8));
 let thumbQueue = [];
 let thumbActive = 0;
 const THUMB_DEFAULT_MAX_SIDE = 192;
 const CATALOG_THUMB_MIN_SIDE = 256;
 const CATALOG_THUMB_MAX_SIDE = 640;
 const thumbInflight = new Map();
+let filmstripThumbGeneration = 0;
+let filmstripWarmTimer = null;
 
 function markThumbFailed(el) {
   if (!el) return;
@@ -4089,12 +4094,22 @@ function applyThumbToElement(el, path, url, maxSide = 0) {
   if (!el || !url) return;
   const img = el.querySelector('img');
   if (img) {
+    img.decoding = 'async';
+    img.loading = el.classList.contains('thumb') ? 'eager' : 'lazy';
     img.onload = () => {
+      img.dataset.thumbFallback = '';
       img.classList.add('loaded');
       el.classList.add('loaded');
       el.classList.remove('is-loading', 'is-failed');
     };
-    img.onerror = () => markThumbFailed(el);
+    img.onerror = () => {
+      if (img.dataset.thumbFallback !== '1') {
+        img.dataset.thumbFallback = '1';
+        img.src = folioMediaUrl(path);
+        return;
+      }
+      markThumbFailed(el);
+    };
     if (img.src !== url) img.src = url;
     if (img.complete && img.naturalWidth) {
       img.classList.add('loaded');
@@ -4121,7 +4136,12 @@ function enqueueThumb(el, p, { priority = false, maxSide = null } = {}) {
   }
   const placeholder = getCachedThumb(p);
   if (placeholder) applyThumbToElement(el, p, placeholder, preloadedThumbSides.get(p) || 0);
-  const job = { el, path: p, retries: 0, priority, maxSide: requestedSide };
+  el.classList.add('is-loading');
+  const requestKey = `${p}:${requestedSide}:${filmstripThumbGeneration}`;
+  if (el.dataset.thumbRequestKey === requestKey) return;
+  el.dataset.thumbRequestKey = requestKey;
+  const generation = el.classList.contains('thumb') ? filmstripThumbGeneration : null;
+  const job = { el, path: p, retries: 0, priority, maxSide: requestedSide, generation };
   if (priority) thumbQueue.unshift(job);
   else thumbQueue.push(job);
   processThumbQueue();
@@ -4136,8 +4156,9 @@ async function processThumbQueue() {
     });
   }
 }
-async function loadThumb({ el, path, retries, priority, maxSide }) {
-  if (!el || !path) return;
+async function loadThumb({ el, path, retries, priority, maxSide, generation }) {
+  if (!el || !path || !el.isConnected) return;
+  if (generation != null && generation !== filmstripThumbGeneration) return;
   const fallback = () => {
     if (el.classList.contains('catalog-card')) {
       if (el.classList.contains('loaded')) return;
@@ -4168,12 +4189,14 @@ async function loadThumb({ el, path, retries, priority, maxSide }) {
       thumbInflight.set(key, request);
     }
     const tp = await request;
+    if (!el.isConnected) return;
+    if (generation != null && generation !== filmstripThumbGeneration) return;
     const u = `folio://localhost/${encodeURIComponent(tp)}?v=${mediaCacheEpoch}`;
     applyThumbToElement(el, path, u, maxSide);
   } catch (err) {
     if (retries < 2) {
       await new Promise(r => setTimeout(r, 220 * (retries + 1)));
-      const retryJob = { el, path, retries: retries + 1, priority, maxSide };
+      const retryJob = { el, path, retries: retries + 1, priority, maxSide, generation };
       if (priority) thumbQueue.unshift(retryJob);
       else thumbQueue.push(retryJob);
     } else {
@@ -4201,7 +4224,24 @@ function resetFilmstripObserver() {
   }, { root: filmstrip, rootMargin: filmstripObserverRootMargin() });
 }
 
-function appendFilmstripThumb(it, i) {
+function warmFilmstripThumbnails(start, end) {
+  if (!prefetchEnabled || !items.length || !hasTauriRuntime()) return;
+  const paths = [];
+  const seen = new Set();
+  for (let i = Math.max(0, start); i < Math.min(items.length, end); i++) {
+    const path = items[i]?.path;
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  if (!paths.length) return;
+  clearTimeout(filmstripWarmTimer);
+  filmstripWarmTimer = setTimeout(() => {
+    invoke('prefetch_media', { paths, maxSide: THUMB_DEFAULT_MAX_SIDE }).catch(() => {});
+  }, 20);
+}
+
+function appendFilmstripThumb(it, i, { eager = false } = {}) {
     const d = document.createElement('div');
     d.className = i === idx ? 'thumb active' : 'thumb';
     d.dataset.path = it.path;
@@ -4262,7 +4302,7 @@ function appendFilmstripThumb(it, i) {
     });
     
     filmstrip.appendChild(d);
-    if (Math.abs(i - idx) <= 1) {
+    if (eager || Math.abs(i - idx) <= 1) {
       d.dataset.loaded = '1';
       enqueueThumb(d, it.path, { priority: true });
     } else {
@@ -4280,6 +4320,8 @@ function applyFilmstripVisibility() {
 }
 
 function buildFilmstrip() {
+  filmstripThumbGeneration += 1;
+  thumbQueue = thumbQueue.filter((job) => job.generation == null);
   resetFilmstripObserver();
   filmstrip.innerHTML = '';
   filmstrip.classList.toggle('grid-view', gridView);
@@ -4299,7 +4341,7 @@ function buildFilmstrip() {
       lead.setAttribute('aria-hidden', 'true');
       filmstrip.appendChild(lead);
     }
-    for (let i = range.start; i < range.end; i++) appendFilmstripThumb(items[i], i);
+    for (let i = range.start; i < range.end; i++) appendFilmstripThumb(items[i], i, { eager: true });
     if (range.end < items.length) {
       const trail = document.createElement('div');
       trail.className = 'filmstrip-spacer';
@@ -4307,6 +4349,7 @@ function buildFilmstrip() {
       trail.setAttribute('aria-hidden', 'true');
       filmstrip.appendChild(trail);
     }
+    warmFilmstripThumbnails(range.start - FILMSTRIP_WINDOW_RADIUS, range.end + FILMSTRIP_WINDOW_RADIUS);
     requestAnimationFrame(() => highlightThumb());
     return;
   }
