@@ -592,6 +592,7 @@ fn main() {
             commands::catalog::open_folder_picker,
             commands::catalog::open_specific_folder,
             commands::catalog::open_media_at_path,
+            commands::catalog::open_dropped_media_at_path,
             drain_pending_open_paths,
             commands::catalog::get_folder_items,
             commands::catalog::get_folder_preview_summary,

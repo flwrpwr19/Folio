@@ -1,6 +1,6 @@
 {
   "version": "1.4.0",
-  "notes": "Redesigned catalog, map, viewer, and settings workspaces; faster recents thumbnails; fixed rotation previews; secure vault and batch job improvements; release packaging polish.",
+  "notes": "Redesigned catalog, map, viewer, and settings workspaces; restored folder drag-and-drop; faster viewport image switching and recents thumbnails; fixed rotation previews; secure vault and batch job improvements; release packaging polish.",
   "pub_date": "2026-06-07T18:17:51Z",
   "platforms": {}
 }

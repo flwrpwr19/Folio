@@ -142,18 +142,39 @@ pub async fn open_media_at_path(
     state: State<'_, Arc<AppState>>,
     app_handle: tauri::AppHandle,
 ) -> Result<OpenMediaResult, String> {
+    open_media_path_inner(file_path, state.inner().clone(), app_handle, false).await
+}
+
+#[tauri::command]
+pub async fn open_dropped_media_at_path(
+    file_path: String,
+    state: State<'_, Arc<AppState>>,
+    app_handle: tauri::AppHandle,
+) -> Result<OpenMediaResult, String> {
+    open_media_path_inner(file_path, state.inner().clone(), app_handle, true).await
+}
+
+async fn open_media_path_inner(
+    file_path: String,
+    state_arc: Arc<AppState>,
+    app_handle: tauri::AppHandle,
+    trusted_user_path: bool,
+) -> Result<OpenMediaResult, String> {
     let path = PathBuf::from(&file_path);
-    let trusted_external_open = crate::consume_external_open_path(&path, state.inner())
+    if trusted_user_path {
+        crate::approve_external_open_path(path.clone(), &state_arc);
+    }
+    let trusted_external_open = crate::consume_external_open_path(&path, &state_arc)
         || path
             .parent()
-            .map(|parent| crate::is_known_library_folder(parent, state.inner()))
+            .map(|parent| crate::is_known_library_folder(parent, &state_arc))
             .unwrap_or(false)
-        || crate::is_path_safe(&path, state.inner());
+        || crate::is_path_safe(&path, &state_arc);
     if path.is_dir() {
         let folder = open_specific_folder_with_active(
             file_path,
             None,
-            state.inner().clone(),
+            state_arc,
             app_handle,
             trusted_external_open,
         )
@@ -174,7 +195,7 @@ pub async fn open_media_at_path(
     open_specific_folder_with_active(
         folder_str.clone(),
         Some(path),
-        state.inner().clone(),
+        state_arc,
         app_handle,
         trusted_external_open,
     )

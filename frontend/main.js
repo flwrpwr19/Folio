@@ -1581,6 +1581,16 @@ const preloadedThumbs = new Map();
 const preloadedThumbSides = new Map();
 const preloadCache = new Map();
 const videoPreloadCache = new Map();
+const VIEWER_TRANSITION_MS = 120;
+const VIEWER_PRELOAD_CACHE_MAX = 32;
+let viewerDeferredWorkToken = 0;
+
+function scheduleViewerIdleWork(callback, timeout = 280) {
+  if ('requestIdleCallback' in window) {
+    return window.requestIdleCallback(callback, { timeout });
+  }
+  return window.setTimeout(callback, Math.min(timeout, 120));
+}
 
 function videoMimeType(path) {
   const ext = (path.split('.').pop() || '').toLowerCase();
@@ -3370,8 +3380,8 @@ function applyPhysicalExit(node, dir) {
   node.style.zIndex = '1';
   node.animate([
     { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1) rotate(0deg)' },
-    { opacity: 0, transform: `translate3d(${dir * -60}px, 0, 0) scale(0.97) rotate(${dir * -1}deg)` }
-  ], { duration: 700, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' }).finished.then(() => node.remove());
+    { opacity: 0, transform: `translate3d(${dir * -24}px, 0, 0) scale(0.99)` }
+  ], { duration: VIEWER_TRANSITION_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' }).finished.then(() => node.remove());
 }
 
 function preloadImage(item) {
@@ -3383,6 +3393,8 @@ function preloadImage(item) {
 
   const img = new Image();
   img.crossOrigin = 'anonymous';
+  img.decoding = 'async';
+  img.loading = 'eager';
   preloadCache.set(item.path, img);
 
   if (isNative) {
@@ -3451,9 +3463,9 @@ function triggerPreload(currentIdx) {
 
   const isFast = speed > 0.003;
   if (isFast) {
-    for (let o = 1; o <= 6; o++) offsets.push(o * direction);
+    for (let o = 1; o <= 10; o++) offsets.push(o * direction);
   } else {
-    offsets.push(-3, -2, -1, 1, 2, 3);
+    offsets.push(-5, -4, -3, -2, -1, 1, 2, 3, 4, 5);
   }
 
   const currentItem = items[currentIdx];
@@ -3470,7 +3482,7 @@ function triggerPreload(currentIdx) {
       preloadImage(item);
       const ext = (item.path.split('.').pop() || '').toLowerCase();
       const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext);
-      if (Math.abs(offset) === 1 && !isNative) {
+      if (Math.abs(offset) <= 2 && !isNative) {
         fullDecodePaths.push(item.path);
       }
     }
@@ -3491,12 +3503,11 @@ function triggerPreload(currentIdx) {
     if (keepSet.has(path)) continue;
     if (!img.complete || !img.naturalWidth) preloadCache.delete(path);
   }
-  const PRELOAD_CACHE_MAX = 18;
-  if (preloadCache.size > PRELOAD_CACHE_MAX) {
+  if (preloadCache.size > VIEWER_PRELOAD_CACHE_MAX) {
     for (const path of preloadCache.keys()) {
       if (!keepSet.has(path)) {
         preloadCache.delete(path);
-        if (preloadCache.size <= PRELOAD_CACHE_MAX) break;
+        if (preloadCache.size <= VIEWER_PRELOAD_CACHE_MAX) break;
       }
     }
   }
@@ -3509,6 +3520,7 @@ function show(i, dir = null) {
   triggerPreload(i);
   const rapidNav = isRapidViewerNav();
   const prevIdx = idx, direction = dir !== null ? dir : (i > prevIdx ? 1 : i < prevIdx ? -1 : 0);
+  const previousItem = items[prevIdx];
   idx = i; zoom = 1; panX = 0; panY = 0;
   zoomSlider.value = 100; zoomLabel.textContent = '100%';
   
@@ -3526,7 +3538,7 @@ function show(i, dir = null) {
     } else if (cinematicEnabled && direction !== 0) {
       applyPhysicalExit(outgoing, direction);
     } else {
-      outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 400, easing: 'ease-out' }).finished.then(() => outgoing.remove());
+      outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: VIEWER_TRANSITION_MS, easing: 'ease-out' }).finished.then(() => outgoing.remove());
     }
   }
   clearMediaContent(outgoing);
@@ -3539,14 +3551,14 @@ function show(i, dir = null) {
     layer.style.transform = 'none';
   } else if (cinematicEnabled && direction !== 0) {
     requestAnimationFrame(() => layer.animate([
-        { opacity: 0, transform: `translate3d(${direction * 50}%, 0, 0) scale(1.02) rotate(${direction * 1.5}deg)` },
+        { opacity: 0, transform: `translate3d(${direction * 24}px, 0, 0) scale(1.01)` },
         { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1) rotate(0deg)' }
-    ], { duration: 750, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' }));
+    ], { duration: VIEWER_TRANSITION_MS, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' }));
   } else {
     requestAnimationFrame(() => layer.animate([
         { opacity: 0 },
         { opacity: 1 }
-    ], { duration: 400, easing: 'ease-out', fill: 'forwards' }));
+    ], { duration: VIEWER_TRANSITION_MS, easing: 'ease-out', fill: 'forwards' }));
     layer.style.transform = 'none';
   }
   
@@ -3610,6 +3622,7 @@ function show(i, dir = null) {
 
     const runViewerChrome = (img) => {
       if (items[idx]?.path !== item.path) return;
+      const workToken = ++viewerDeferredWorkToken;
       img.classList.add('loaded');
       img.style.opacity = '1';
       viewer.classList.remove('loading');
@@ -3619,11 +3632,12 @@ function show(i, dir = null) {
         ph.classList.add('fade-out');
         setTimeout(() => ph.remove(), 120);
       }
-      requestAnimationFrame(() => {
-        if (items[idx]?.path !== item.path) return;
+      scheduleViewerIdleWork(() => {
+        if (workToken !== viewerDeferredWorkToken || items[idx]?.path !== item.path) return;
         try { updateAdaptiveGlow(img); } catch (e) { console.error('Adaptive glow error:', e); }
         if (isEditPreviewEnabled()) {
           invoke('prepare_edit_preview', { path: item.path }).then(() => {
+            if (workToken !== viewerDeferredWorkToken || items[idx]?.path !== item.path) return;
             editSessionPath = item.path;
             loadEditForCurrent();
           }).catch(e => console.error(e));
@@ -3642,6 +3656,9 @@ function show(i, dir = null) {
       img = cached;
       img.className = 'media-content';
       img.alt = '';
+      img.decoding = 'async';
+      img.loading = 'eager';
+      img.fetchPriority = 'high';
       img.style.opacity = '1';
       layer.appendChild(img);
       runViewerChrome(img);
@@ -3650,12 +3667,12 @@ function show(i, dir = null) {
       img.crossOrigin = 'anonymous';
       img.alt = '';
       img.className = 'media-content';
+      img.decoding = 'async';
+      img.loading = 'eager';
+      img.fetchPriority = 'high';
 
-      const revealViewerImage = async () => {
+      const revealViewerImage = () => {
         const token = ++revealToken;
-        if (usePlaceholder && img.decode) {
-          try { await img.decode(); } catch (_) { /* show anyway */ }
-        }
         if (token !== revealToken || items[idx]?.path !== item.path) return;
         if (!img.naturalWidth) return;
         runViewerChrome(img);
@@ -3763,12 +3780,16 @@ function show(i, dir = null) {
   highlightThumb();
   updateViewerToolbar();
   viewerChromeCtl?.wake();
-  document.querySelectorAll('.catalog-card').forEach((card) => {
-    card.classList.toggle('is-focused', card.dataset.path === items[idx]?.path);
-  });
+  if (catalogContent) {
+    for (const path of [previousItem?.path, item.path]) {
+      if (!path) continue;
+      catalogContent
+        .querySelector(`.catalog-card[data-path="${CSS.escape(path)}"]`)
+        ?.classList.toggle('is-focused', path === item.path);
+    }
+  }
   closeCropMode();
   removeEditPreview();
-  triggerPreload(i);
 }
 
 function formatCaptureDate(item) {
@@ -6087,11 +6108,15 @@ currentTauriWebview()?.onDragDropEvent(async (event) => {
     dropzoneGlow?.classList.remove('active');
     if (!paths?.length) return;
     try {
-      const p = await invoke('open_specific_folder', { path: paths[0] });
-      await rememberLibraryFolder(paths[0]);
+      const result = await invoke('open_dropped_media_at_path', { filePath: paths[0] });
+      const p = result.folder || paths[0];
+      await rememberLibraryFolder(p);
       renderHomeHub();
-      loadFolderData(p);
-    } catch (err) { console.error(err); }
+      await loadFolderData(p, result.file || null);
+    } catch (err) {
+      console.error(err);
+      showToast(`Could not open dropped item: ${err}`);
+    }
   }
 });
 
