@@ -394,6 +394,13 @@ fn cache_size(files: &Mutex<HashMap<PathBuf, CacheFileInfo>>) -> u64 {
         .sum()
 }
 
+fn should_decode_with_sips(path: &Path) -> bool {
+    const LARGE_DECODE_BYTES: u64 = 80 * 1024 * 1024;
+    fs::metadata(path)
+        .map(|meta| meta.len() > LARGE_DECODE_BYTES)
+        .unwrap_or(false)
+}
+
 fn touch_cache_file(
     files: &Mutex<HashMap<PathBuf, CacheFileInfo>>,
     path: &Path,
@@ -1346,10 +1353,21 @@ impl LibraryCache {
         }
         let tmp_path = cached.with_extension("tmp");
 
-        if media_core::needs_sips_decode(path) {
-            media_core::sips_output_to_file(path, &tmp_path, None, "jpeg")
-                .with_context(|| format!("native sips decode failed for {}", path.display()))?;
+        let used_sips = if media_core::needs_sips_decode(path) || should_decode_with_sips(path) {
+            match media_core::sips_output_to_file(path, &tmp_path, None, "jpeg") {
+                Ok(()) => true,
+                Err(err) if media_core::needs_sips_decode(path) => {
+                    return Err(err).with_context(|| {
+                        format!("native sips decode failed for {}", path.display())
+                    });
+                }
+                Err(_) => false,
+            }
         } else {
+            false
+        };
+
+        if !used_sips {
             let img = media_core::open_image(path)?;
             let img = media_core::apply_exif_orientation(img, path);
             let rgb8 = img.to_rgb8();
@@ -1419,7 +1437,7 @@ impl LibraryCache {
                     ext.as_str(),
                     "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp"
                 );
-                if !native {
+                if !native || should_decode_with_sips(path) {
                     let _ = self.ensure_decoded(path);
                 }
             });

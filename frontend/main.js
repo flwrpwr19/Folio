@@ -3109,6 +3109,7 @@ function updateViewerToolbar() {
 
 function processLoadedItems(rawItems) {
   if (!rawItems) return [];
+  resetFilmstripWarmState();
   const movPaths = new Map();
   rawItems.forEach(it => {
     if (it.is_video && it.path.toLowerCase().endsWith('.mov')) {
@@ -3387,12 +3388,33 @@ function applyPhysicalExit(node, dir) {
   ], { duration: VIEWER_TRANSITION_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' }).finished.then(() => node.remove());
 }
 
+const VIEWER_DIRECT_IMAGE_MAX_PIXELS = 48_000_000;
+const VIEWER_DIRECT_IMAGE_MAX_BYTES = 80 * 1024 * 1024;
+const BROWSER_NATIVE_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp']);
+
+function isBrowserNativeImage(item) {
+  const ext = (item?.path?.split('.').pop() || '').toLowerCase();
+  return BROWSER_NATIVE_IMAGE_EXTS.has(ext);
+}
+
+function shouldUseDecodedViewerImage(item) {
+  if (!item || item.is_video) return false;
+  if (!isBrowserNativeImage(item)) return true;
+  const pixels = Number(item.width || 0) * Number(item.height || 0);
+  return pixels > VIEWER_DIRECT_IMAGE_MAX_PIXELS || Number(item.size || 0) > VIEWER_DIRECT_IMAGE_MAX_BYTES;
+}
+
+function resolveViewerImageUrl(item, { force = false, cacheBust = '' } = {}) {
+  if (!shouldUseDecodedViewerImage(item)) {
+    return Promise.resolve(`${folioMediaUrl(item.path)}${cacheBust}`);
+  }
+  return invoke('get_full_image', { path: item.path, force })
+    .then(p => `folio://localhost/${encodeURIComponent(p)}${cacheBust}`);
+}
+
 function preloadImage(item) {
   if (!item || item.is_video) return;
   if (preloadCache.has(item.path)) return;
-
-  const ext = (item.path.split('.').pop() || '').toLowerCase();
-  const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext);
 
   const img = new Image();
   img.crossOrigin = 'anonymous';
@@ -3400,17 +3422,9 @@ function preloadImage(item) {
   img.loading = 'eager';
   preloadCache.set(item.path, img);
 
-  if (isNative) {
-    img.src = `folio://localhost/${encodeURIComponent(item.path)}`;
-  } else {
-    invoke('get_full_image', { path: item.path })
-      .then(p => {
-        img.src = `folio://localhost/${encodeURIComponent(p)}`;
-      })
-      .catch(() => {
-        preloadCache.delete(item.path);
-      });
-  }
+  resolveViewerImageUrl(item)
+    .then(url => { img.src = url; })
+    .catch(() => { preloadCache.delete(item.path); });
 }
 
 function preloadVideo(item) {
@@ -3483,9 +3497,7 @@ function triggerPreload(currentIdx) {
       preloadVideo(item);
     } else {
       preloadImage(item);
-      const ext = (item.path.split('.').pop() || '').toLowerCase();
-      const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext);
-      if (Math.abs(offset) <= 2 && !isNative) {
+      if (Math.abs(offset) <= 2 && shouldUseDecodedViewerImage(item)) {
         fullDecodePaths.push(item.path);
       }
     }
@@ -3650,7 +3662,6 @@ function show(i, dir = null) {
       });
     };
 
-    const isNative = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(item.path.split('.').pop().toLowerCase());
     let img;
     let revealToken = 0;
 
@@ -3688,25 +3699,24 @@ function show(i, dir = null) {
         if (ph) ph.remove();
         renderMediaError(layer, item, () => {
           img.src = '';
-          if (isNative) {
-            img.src = src + '?retry=' + Date.now();
-          } else {
-            invoke('clear_decode_failures', { path: item.path }).catch(() => {});
-            invoke('get_full_image', { path: item.path, force: true })
-              .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}?retry=${Date.now()}`; })
-              .catch(() => { img.src = src + '?retry=' + Date.now(); });
-          }
+          invoke('clear_decode_failures', { path: item.path }).catch(() => {});
+          resolveViewerImageUrl(item, { force: true, cacheBust: `?retry=${Date.now()}` })
+            .then(url => { img.src = url; })
+            .catch(() => {
+              if (isBrowserNativeImage(item) && !shouldUseDecodedViewerImage(item)) {
+                img.src = `${src}?retry=${Date.now()}`;
+              }
+            });
         });
       };
 
-      if (isNative) {
-        img.src = src;
-        if (img.complete && img.naturalWidth > 0) revealViewerImage();
-      } else {
-        invoke('get_full_image', { path: item.path })
-          .then(p => { img.src = `folio://localhost/${encodeURIComponent(p)}`; })
-          .catch(() => { img.onerror(); });
-      }
+      resolveViewerImageUrl(item)
+        .then(url => {
+          if (items[idx]?.path !== item.path) return;
+          img.src = url;
+          if (img.complete && img.naturalWidth > 0) revealViewerImage();
+        })
+        .catch(() => { img.onerror(); });
       layer.appendChild(img);
     }
 
@@ -4048,9 +4058,20 @@ let thumbActive = 0;
 const THUMB_DEFAULT_MAX_SIDE = 192;
 const CATALOG_THUMB_MIN_SIDE = 256;
 const CATALOG_THUMB_MAX_SIDE = 640;
+const FILMSTRIP_INITIAL_WARM_COUNT = 360;
+const FILMSTRIP_NAV_WARM_AHEAD = 240;
 const thumbInflight = new Map();
 let filmstripThumbGeneration = 0;
 let filmstripWarmTimer = null;
+let filmstripWarmGeneration = 0;
+let filmstripWarmKeys = new Set();
+
+function resetFilmstripWarmState() {
+  clearTimeout(filmstripWarmTimer);
+  filmstripWarmTimer = null;
+  filmstripWarmGeneration += 1;
+  filmstripWarmKeys = new Set();
+}
 
 function markThumbFailed(el) {
   if (!el) return;
@@ -4224,21 +4245,23 @@ function resetFilmstripObserver() {
   }, { root: filmstrip, rootMargin: filmstripObserverRootMargin() });
 }
 
-function warmFilmstripThumbnails(start, end) {
+function warmFilmstripThumbnails(start, end, { delay = 20 } = {}) {
   if (!prefetchEnabled || !items.length || !hasTauriRuntime()) return;
   const paths = [];
-  const seen = new Set();
+  const generation = filmstripWarmGeneration;
   for (let i = Math.max(0, start); i < Math.min(items.length, end); i++) {
     const path = items[i]?.path;
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
+    const key = `${path}:${THUMB_DEFAULT_MAX_SIDE}`;
+    if (!path || filmstripWarmKeys.has(key)) continue;
+    filmstripWarmKeys.add(key);
     paths.push(path);
   }
   if (!paths.length) return;
   clearTimeout(filmstripWarmTimer);
   filmstripWarmTimer = setTimeout(() => {
+    if (generation !== filmstripWarmGeneration) return;
     invoke('prefetch_media', { paths, maxSide: THUMB_DEFAULT_MAX_SIDE }).catch(() => {});
-  }, 20);
+  }, delay);
 }
 
 function appendFilmstripThumb(it, i, { eager = false } = {}) {
@@ -4349,7 +4372,8 @@ function buildFilmstrip() {
       trail.setAttribute('aria-hidden', 'true');
       filmstrip.appendChild(trail);
     }
-    warmFilmstripThumbnails(range.start - FILMSTRIP_WINDOW_RADIUS, range.end + FILMSTRIP_WINDOW_RADIUS);
+    warmFilmstripThumbnails(0, Math.min(items.length, FILMSTRIP_INITIAL_WARM_COUNT), { delay: 10 });
+    warmFilmstripThumbnails(range.start - FILMSTRIP_WINDOW_RADIUS, range.end + FILMSTRIP_NAV_WARM_AHEAD, { delay: 10 });
     requestAnimationFrame(() => highlightThumb());
     return;
   }
@@ -4381,6 +4405,11 @@ function highlightThumb() {
   if (targetThumb) {
     targetThumb.classList.add('active');
     FolioState.activeThumbEl = targetThumb;
+    if (!targetThumb.classList.contains('loaded')) {
+      targetThumb.dataset.loaded = '1';
+      enqueueThumb(targetThumb, path, { priority: true });
+    }
+    warmFilmstripThumbnails(idx - FILMSTRIP_WINDOW_RADIUS, idx + FILMSTRIP_NAV_WARM_AHEAD, { delay: 10 });
     const scrollBehavior = reducedMotionEnabled ? 'auto' : 'smooth';
     if (filmstrip.classList.contains('viewer-filmstrip')) {
       filmstrip.scrollTo({

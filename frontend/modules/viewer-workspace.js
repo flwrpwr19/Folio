@@ -1,6 +1,6 @@
 /** Immersive viewer chrome: floating dock idle state and filmstrip windowing. */
 
-export const FILMSTRIP_WINDOW_RADIUS = 18;
+export const FILMSTRIP_WINDOW_RADIUS = 96;
 export const FILMSTRIP_THUMB_STEP_PX = 40;
 
 export function isFilmstripVisible() {
