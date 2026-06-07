@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BUNDLE_ID: &str = "com.folio.app";
+const BUNDLE_ID: &str = "com.folio.desktop";
 
 const MEDIA_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tiff", "tif", "bmp", "avif", "dng", "cr2",
-    "nef", "arw", "orf", "mp4", "mov", "m4v", "mkv", "webm", "avi",
+    "jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tiff", "tif", "bmp", "avif", "dng",
+    "cr2", "nef", "arw", "orf", "mp4", "mov", "m4v", "mkv", "webm", "avi",
 ];
 
 #[derive(serde::Serialize)]

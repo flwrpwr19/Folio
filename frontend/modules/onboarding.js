@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'folio_onboarding_complete';
 const STORAGE_VERSION_KEY = 'folio_onboarding_version';
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
+let prefControlSequence = 0;
 
 const STEPS = [
   {
@@ -9,45 +10,28 @@ const STEPS = [
     body: 'Fast, private photo and video browsing for macOS. Your library stays on your Mac — no account, no cloud upload.',
   },
   {
-    id: 'install',
-    title: 'Install & trust',
-    body: 'Move Folio from the disk image into Applications. Because Folio is distributed without Apple notarization, macOS may block the first launch.',
-    install: true,
-  },
-  {
-    id: 'permissions',
-    title: 'Folder access',
-    body: 'Folio reads folders you choose. It stores thumbnails and metadata in a local cache on your Mac. Nothing is sent to the cloud.',
-  },
-  {
     id: 'library',
-    title: 'Open your library',
-    body: 'Pick a folder of photos or videos to get started. You can change libraries anytime from the sidebar.',
+    title: 'Choose your first library',
+    body: 'Open any photo or video folder. Folio reads only locations you choose and keeps thumbnails and metadata in a local cache.',
     primary: 'Open Folder',
   },
   {
-    id: 'defaultApp',
-    title: 'Open files with Folio',
-    body: 'Register Folio in Finder’s “Open With” menu and optionally make it the default app for photos and videos — double-click to open in Folio.',
-    defaultApp: true,
-  },
-  {
     id: 'tour',
-    title: 'Your workspace',
-    body: 'Navigate with the left sidebar, browse media in the center, and use the right inspector for metadata, edits, presets, and batch jobs. Press G for the catalog grid.',
+    title: 'A focused workspace',
+    body: 'Browse in the center, filter from the left sidebar, and inspect metadata or edits on the right. Switch to the catalog whenever you want a broader view.',
     tour: true,
   },
   {
     id: 'prefs',
-    title: 'Preferences',
-    body: 'Set optional defaults now. Everything can be changed later in Settings.',
+    title: 'Make it yours',
+    body: 'Choose a few useful defaults now. Advanced options, file associations, and cache controls remain available in Settings.',
     prefs: true,
   },
   {
     id: 'done',
     title: 'You\'re ready',
-    body: 'Folio is set up. Open a folder whenever you\'re ready to browse.',
-    primary: 'Get started',
+    body: 'Your workspace is ready. Use the home screen to reopen recent libraries, pin favorites, or browse another folder.',
+    primary: 'Start browsing',
   },
 ];
 
@@ -72,6 +56,11 @@ function addPrefRow(container, labelText, control) {
   row.className = 'onboarding-pref-row';
   const label = document.createElement('label');
   label.textContent = labelText;
+  const labeledControl = control.matches?.('input, select, textarea') ? control : control.querySelector?.('input, select, textarea');
+  if (labeledControl) {
+    labeledControl.id ||= `onboardingPref${++prefControlSequence}`;
+    label.htmlFor = labeledControl.id;
+  }
   row.append(label, control);
   container.appendChild(row);
 }
@@ -155,11 +144,17 @@ export function initOnboarding(opts = {}) {
 
   function renderProgress() {
     progress.innerHTML = '';
-    STEPS.forEach((_, i) => {
+    STEPS.forEach((step, i) => {
       const dot = document.createElement('span');
       dot.className = 'onboarding-dot' + (i === stepIndex ? ' active' : i < stepIndex ? ' done' : '');
+      dot.title = step.title;
+      dot.setAttribute('aria-label', `${i + 1}. ${step.title}`);
       progress.appendChild(dot);
     });
+    const label = document.createElement('span');
+    label.className = 'onboarding-progress-label';
+    label.textContent = `${stepIndex + 1} of ${STEPS.length} · ${STEPS[stepIndex].title}`;
+    progress.appendChild(label);
   }
 
   function renderInstallExtra() {

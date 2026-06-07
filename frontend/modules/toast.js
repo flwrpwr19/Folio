@@ -11,6 +11,7 @@ export function showToast(message) {
   const isError = /fail|error|denied/i.test(String(message));
   const toast = document.createElement('div');
   toast.className = 'folio-toast' + (isError ? ' folio-toast-error' : '');
+  toast.setAttribute('role', isError ? 'alert' : 'status');
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   icon.setAttribute('class', 'folio-toast-icon');
   icon.setAttribute('width', '16');

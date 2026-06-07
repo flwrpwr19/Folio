@@ -165,8 +165,12 @@ static INDEX_THREAD_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
 fn get_index_thread_pool() -> &'static rayon::ThreadPool {
     INDEX_THREAD_POOL.get_or_init(|| {
+        let thread_count = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 8);
         match rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
+            .num_threads(thread_count)
             .thread_name(|idx| format!("folio-index-{}", idx))
             .build()
         {
@@ -282,7 +286,7 @@ pub struct LibraryCache {
     pub shutdown: Arc<std::sync::atomic::AtomicBool>,
     thumbnail_in_flight: Arc<(Mutex<HashSet<PathBuf>>, Condvar)>,
     decoded_in_flight: Arc<(Mutex<HashSet<PathBuf>>, Condvar)>,
-    fingerprints: Mutex<HashMap<PathBuf, (i64, String)>>,
+    fingerprints: Mutex<HashMap<PathBuf, (i64, u64, String)>>,
     thumbnail_files: Mutex<HashMap<PathBuf, CacheFileInfo>>,
     decoded_files: Mutex<HashMap<PathBuf, CacheFileInfo>>,
 }
@@ -1378,7 +1382,7 @@ impl LibraryCache {
     }
 
     pub fn warm_thumbnails(&self, paths: &[PathBuf], active_index: usize, max_side: u32) {
-        const WARM_LIMIT: usize = 48;
+        const WARM_LIMIT: usize = 20;
         let parallel = Self::cache_parallelism();
         let mut indexed_paths: Vec<(usize, &PathBuf)> = paths.iter().enumerate().collect();
         indexed_paths
@@ -1430,16 +1434,21 @@ impl LibraryCache {
     }
 
     fn image_fingerprint(&self, path: &Path) -> Result<(String, i64)> {
-        let stamp = modified_secs(path)?;
+        let metadata = fs::metadata(path)?;
+        let stamp = metadata_modified_secs(&metadata)
+            .map(|secs| secs as i64)
+            .with_context(|| format!("invalid modified time for {}", path.display()))?;
+        let size = metadata.len();
         let mut fingerprints = self.fingerprints.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((cached_stamp, fingerprint)) = fingerprints.get(path)
+        if let Some((cached_stamp, cached_size, fingerprint)) = fingerprints.get(path)
             && *cached_stamp == stamp
+            && *cached_size == size
         {
             return Ok((fingerprint.clone(), stamp));
         }
-        let key = format!("{}::{stamp}_v3", path.to_string_lossy());
+        let key = format!("{}::{stamp}:{size}_v4", path.to_string_lossy());
         let fingerprint = blake3::hash(key.as_bytes()).to_hex().to_string();
-        fingerprints.insert(path.to_path_buf(), (stamp, fingerprint.clone()));
+        fingerprints.insert(path.to_path_buf(), (stamp, size, fingerprint.clone()));
         Ok((fingerprint, stamp))
     }
 }

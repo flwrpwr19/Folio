@@ -113,14 +113,7 @@ pub async fn open_folder_picker(
     let path_str = tauri::async_runtime::spawn_blocking(move || {
         let index = build_index(&folder_path, &state_arc.cache).map_err(|e| e.to_string())?;
         let path_str = folder_path.to_string_lossy().to_string();
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
         *state_arc.index.write() = Some(index);
-
-        // Spawn background thread to pre-warm thumbnails in parallel
-        let state_clone = state_arc.clone();
-        std::thread::spawn(move || {
-            state_clone.cache.warm_thumbnails(&paths, 0, 320);
-        });
 
         Ok::<String, String>(path_str)
     })
@@ -132,6 +125,7 @@ pub async fn open_folder_picker(
         &state.inner().clone(),
         app_handle,
     );
+    let _ = crate::commands::recent::remember_recent_folder_path(path_str.clone(), state.inner());
     crate::rebuild_canonical_roots(&state.inner());
     Ok(Some(path_str))
 }
@@ -149,8 +143,21 @@ pub async fn open_media_at_path(
     app_handle: tauri::AppHandle,
 ) -> Result<OpenMediaResult, String> {
     let path = PathBuf::from(&file_path);
+    let trusted_external_open = crate::consume_external_open_path(&path, state.inner())
+        || path
+            .parent()
+            .map(|parent| crate::is_known_library_folder(parent, state.inner()))
+            .unwrap_or(false)
+        || crate::is_path_safe(&path, state.inner());
     if path.is_dir() {
-        let folder = open_specific_folder(file_path, state, app_handle).await?;
+        let folder = open_specific_folder_with_active(
+            file_path,
+            None,
+            state.inner().clone(),
+            app_handle,
+            trusted_external_open,
+        )
+        .await?;
         return Ok(OpenMediaResult {
             folder,
             file: String::new(),
@@ -169,6 +176,7 @@ pub async fn open_media_at_path(
         Some(path),
         state.inner().clone(),
         app_handle,
+        trusted_external_open,
     )
     .await?;
     Ok(OpenMediaResult {
@@ -183,18 +191,24 @@ pub async fn open_specific_folder(
     state: State<'_, Arc<AppState>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    open_specific_folder_with_active(path, None, state.inner().clone(), app_handle).await
+    open_specific_folder_with_active(path, None, state.inner().clone(), app_handle, false).await
 }
 
 async fn open_specific_folder_with_active(
     path: String,
-    active_path: Option<PathBuf>,
+    _active_path: Option<PathBuf>,
     state_arc: Arc<AppState>,
     app_handle: tauri::AppHandle,
+    trusted_external_open: bool,
 ) -> Result<String, String> {
     let folder_path = PathBuf::from(&path);
     if !folder_path.exists() || !folder_path.is_dir() {
         return Err("The specified path does not exist or is not a directory".to_string());
+    }
+    if !trusted_external_open && !crate::is_known_library_folder(&folder_path, &state_arc) {
+        return Err(
+            "Permission denied: use Open Folder to grant Folio access to this location".to_string(),
+        );
     }
     let folder_path_clone = folder_path.clone();
     let state_arc_clone = state_arc.clone();
@@ -202,18 +216,7 @@ async fn open_specific_folder_with_active(
         let index =
             build_index(&folder_path_clone, &state_arc_clone.cache).map_err(|e| e.to_string())?;
         let path_str = folder_path_clone.to_string_lossy().to_string();
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
-        let active_index = active_path
-            .as_deref()
-            .and_then(|path| index.position(path))
-            .unwrap_or(0);
         *state_arc_clone.index.write() = Some(index);
-
-        // Spawn background thread to pre-warm thumbnails in parallel
-        let state_clone = state_arc_clone.clone();
-        std::thread::spawn(move || {
-            state_clone.cache.warm_thumbnails(&paths, active_index, 320);
-        });
 
         Ok::<String, String>(path_str)
     })
@@ -221,6 +224,7 @@ async fn open_specific_folder_with_active(
     .map_err(|e| e.to_string())??;
 
     let _ = setup_watcher(&folder_path, &state_arc, app_handle);
+    let _ = crate::commands::recent::remember_recent_folder_path(path_str.clone(), &state_arc);
     crate::rebuild_canonical_roots(&state_arc);
     Ok(path_str)
 }
@@ -331,7 +335,6 @@ pub async fn refresh_active_library(
         };
         let path_str = folder_path.to_string_lossy().to_string();
         let items = index_to_ui_items(&index);
-        let paths: Vec<PathBuf> = index.items.iter().map(|item| item.path.clone()).collect();
         *state_arc.index.write() = Some(index);
 
         state_arc.resolved_thumbs.lock().clear();
@@ -339,11 +342,6 @@ pub async fn refresh_active_library(
         state_arc.decode_failures.lock().clear();
         state_arc.thumb_failures.lock().clear();
         state_arc.dominant_colors.lock().clear();
-
-        let state_clone = state_arc.clone();
-        std::thread::spawn(move || {
-            state_clone.cache.warm_thumbnails(&paths, 0, 320);
-        });
 
         Ok(Some(RefreshLibraryResult {
             folder: path_str,
@@ -361,6 +359,87 @@ pub async fn refresh_active_library(
     Ok(refresh)
 }
 
+#[derive(serde::Serialize)]
+pub struct MapMediaPoint {
+    pub path: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub modified: u64,
+    pub rating: Option<u8>,
+    pub favorite: bool,
+}
+
+#[tauri::command]
+pub async fn get_map_media_points(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<MapMediaPoint>, String> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let index_guard = state_arc.index.read();
+        let Some(index) = &*index_guard else {
+            return Ok(Vec::new());
+        };
+
+        let conn = state_arc.cache.conn().map_err(|e| e.to_string())?;
+        let mut meta_stmt = conn
+            .prepare_cached(
+                "SELECT latitude, longitude FROM image_metadata
+                 WHERE path = ?1 AND latitude IS NOT NULL AND longitude IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut attr_stmt = conn
+            .prepare_cached("SELECT rating, favorite FROM media_attributes WHERE path = ?1")
+            .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::new();
+
+        for item in &index.items {
+            if item.is_video {
+                continue;
+            }
+            let path_str = item.path.to_string_lossy().to_string();
+
+            let coords = if let Some(exif) = &item.metadata.exif {
+                match (exif.latitude, exif.longitude) {
+                    (Some(lat), Some(lon)) => Some((lat, lon)),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            let (lat, lon) = if let Some(pair) = coords {
+                pair
+            } else if let Ok(pair) = meta_stmt.query_row([&path_str], |row| {
+                Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
+            }) {
+                pair
+            } else {
+                continue;
+            };
+
+            let (rating, favorite) = attr_stmt
+                .query_row([&path_str], |row| {
+                    Ok((row.get::<_, Option<u8>>(0)?, row.get::<_, i64>(1)? != 0))
+                })
+                .unwrap_or((None, false));
+
+            out.push(MapMediaPoint {
+                path: path_str,
+                latitude: lat,
+                longitude: lon,
+                modified: item.modified,
+                rating,
+                favorite,
+            });
+        }
+
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn get_folder_items(state: State<'_, Arc<AppState>>) -> Result<Vec<UiItem>, String> {
     let state_arc = state.inner().clone();
@@ -371,6 +450,71 @@ pub async fn get_folder_items(state: State<'_, Arc<AppState>>) -> Result<Vec<UiI
         } else {
             Ok(vec![])
         }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+pub struct FolderPreviewSummary {
+    pub count: usize,
+    pub previews: Vec<String>,
+    pub preview_thumbnails: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn get_folder_preview_summary(
+    path: String,
+    limit: Option<usize>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<FolderPreviewSummary, String> {
+    let folder_path = PathBuf::from(&path);
+    if !folder_path.exists() || !folder_path.is_dir() {
+        return Err("The specified path does not exist or is not a directory".to_string());
+    }
+    if !crate::is_known_library_folder(&folder_path, &state) {
+        return Err(
+            "Permission denied: use Open Folder to grant Folio access to this location".to_string(),
+        );
+    }
+
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let limit = limit.unwrap_or(5).clamp(1, 12);
+        let paths = media_core::scan_supported_media(&folder_path).map_err(|e| e.to_string())?;
+        let preview_paths = paths
+            .iter()
+            .filter(|path| !media_core::is_video_path(path))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let previews = preview_paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        let preview_thumbnails = preview_paths
+            .iter()
+            .map(|path| {
+                let path_str = path.to_string_lossy().to_string();
+                match state_arc.cache.ensure_thumbnail(path, 200) {
+                    Ok(thumb_path) => {
+                        let thumb_str = thumb_path.to_string_lossy().to_string();
+                        state_arc
+                            .resolved_thumbs
+                            .lock()
+                            .put((path_str, 200), thumb_str.clone());
+                        thumb_str
+                    }
+                    Err(_) => String::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(FolderPreviewSummary {
+            count: paths.len(),
+            previews,
+            preview_thumbnails,
+        })
     })
     .await
     .map_err(|e| e.to_string())?

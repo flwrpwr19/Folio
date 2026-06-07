@@ -1,6 +1,6 @@
 {
-  "version": "1.3.2",
-  "notes": "Faster indexing, metadata hydration, thumbnail generation, cache reuse, and vault I/O; restores raw-image metadata inspection and first-pass viewer card animations; refreshes installer artwork.",
-  "pub_date": "2026-05-31T22:58:57Z",
+  "version": "1.4.0",
+  "notes": "Redesigned catalog, map, viewer, and settings workspaces; faster recents thumbnails; fixed rotation previews; secure vault and batch job improvements; release packaging polish.",
+  "pub_date": "2026-06-07T18:17:51Z",
   "platforms": {}
 }

@@ -10,7 +10,10 @@ fn compile_macos_helper() {
     use std::path::PathBuf;
     use std::process::Command;
 
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let Ok(out_dir) = std::env::var("OUT_DIR") else {
+        return;
+    };
+    let out_dir = PathBuf::from(out_dir);
     let helper_src = PathBuf::from("helpers/folio_macos_helper.swift");
     let helper_bin = out_dir.join("folio_macos_helper");
 
@@ -53,7 +56,10 @@ fn compile_macos_helper() {
 
     let status = cmd.status();
     if status.map(|s| s.success()).unwrap_or(false) {
-        println!("cargo:rustc-env=FOLIO_MACOS_HELPER={}", helper_bin.display());
+        println!(
+            "cargo:rustc-env=FOLIO_MACOS_HELPER={}",
+            helper_bin.display()
+        );
         println!("cargo:rerun-if-changed=helpers/folio_macos_helper.swift");
     }
 }

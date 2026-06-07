@@ -189,7 +189,9 @@ fn transcode_one(path: &Path, target: &str) -> Result<(), String> {
         image::ImageFormat::Avif => "avif",
         _ => "dat",
     };
-    let out_path = dir.join(format!("{stem}.{ext}"));
+    let hash = blake3::hash(path.to_string_lossy().as_bytes()).to_hex();
+    let suffix = hash.as_str().get(..8).unwrap_or("00000000");
+    let out_path = dir.join(format!("{stem}-folio-{suffix}.{ext}"));
     image::DynamicImage::ImageRgba8(img.into_rgba8())
         .save_with_format(out_path, fmt)
         .map_err(|e| e.to_string())
@@ -214,14 +216,16 @@ fn run_path_job<F>(
             return;
         }
         let p = PathBuf::from(&path);
-        let mut res = if crate::is_path_safe(&p, &state) {
-            f(&path, &p, &state)
+        let res = if crate::is_path_safe(&p, &state) {
+            let first = f(&path, &p, &state);
+            if first.is_err() && !cancel.load(Ordering::SeqCst) {
+                f(&path, &p, &state)
+            } else {
+                first
+            }
         } else {
             Err("outside safe sandbox boundaries".to_string())
         };
-        if res.is_err() && !cancel.load(Ordering::SeqCst) {
-            res = f(&path, &p, &state);
-        }
         job_update(&state, &job_id, |s| {
             s.completed += 1;
             if let Err(e) = res {

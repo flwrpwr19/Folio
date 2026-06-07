@@ -95,10 +95,19 @@ pub struct VaultInfo {
 }
 
 pub fn default_vault_dir() -> PathBuf {
-    dirs::cache_dir()
+    let current = dirs::data_dir()
+        .or_else(dirs::cache_dir)
         .unwrap_or_else(std::env::temp_dir)
         .join("folio-app")
-        .join("vault")
+        .join("vault");
+    if current.exists() {
+        return current;
+    }
+    let legacy = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("folio-app")
+        .join("vault");
+    if legacy.exists() { legacy } else { current }
 }
 
 pub fn is_vault_path(path: &Path) -> bool {
@@ -148,10 +157,45 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 fn key_file_path() -> PathBuf {
-    dirs::cache_dir()
+    let current = dirs::data_dir()
+        .or_else(dirs::cache_dir)
         .unwrap_or_else(std::env::temp_dir)
         .join("folio-app")
-        .join("vault.key")
+        .join("vault.key");
+    if current.exists() {
+        return current;
+    }
+    let legacy = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("folio-app")
+        .join("vault.key");
+    if legacy.exists() { legacy } else { current }
+}
+
+fn write_fallback_key(path: &Path, encoded: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("Failed to store fallback vault key: {e}"))?;
+        file.write_all(encoded.as_bytes())
+            .map_err(|e| format!("Failed to store fallback vault key: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync fallback vault key: {e}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, encoded)
+            .map_err(|e| format!("Failed to store fallback vault key: {e}"))
+    }
 }
 
 fn read_keychain_password() -> Option<String> {
@@ -224,8 +268,7 @@ fn vault_key() -> Result<[u8; 32], String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create key dir: {e}"))?;
     }
-    std::fs::write(&path, encoded)
-        .map_err(|e| format!("Failed to store fallback vault key: {e}"))?;
+    write_fallback_key(&path, &encoded)?;
     Ok(key)
 }
 

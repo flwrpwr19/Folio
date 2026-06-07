@@ -16,8 +16,9 @@ pub struct ImageLruCache {
 
 impl ImageLruCache {
     pub fn new(max_bytes: usize) -> Self {
+        let capacity = NonZeroUsize::new(1000).unwrap_or(NonZeroUsize::MIN);
         Self {
-            inner: Mutex::new((LruCache::new(NonZeroUsize::new(1000).unwrap()), 0)),
+            inner: Mutex::new((LruCache::new(capacity), 0)),
             max_bytes,
         }
     }
@@ -123,6 +124,7 @@ pub async fn trigger_macos_sound(name: String, volume: Option<f64>) -> Result<()
 pub async fn get_thumbnail(
     path: String,
     max_side: u32,
+    force: Option<bool>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let p = PathBuf::from(&path);
@@ -133,12 +135,18 @@ pub async fn get_thumbnail(
     {
         let cache_key = (path.clone(), max_side);
         let mut cache = state.resolved_thumbs.lock();
-        if let Some(cached_path) = cache.get(&cache_key) {
-            return Ok(cached_path.clone());
+        if let Some(cached_path) = cache.get(&cache_key).cloned() {
+            if PathBuf::from(&cached_path).exists() {
+                return Ok(cached_path.clone());
+            }
+            let _ = cache.pop(&cache_key);
         }
     }
 
-    if state.thumb_failures.lock().contains(&path) {
+    let force_retry = force.unwrap_or(false);
+    if force_retry {
+        state.thumb_failures.lock().remove(&path);
+    } else if state.thumb_failures.lock().contains(&path) {
         return Err("Previous thumbnail attempt failed for this file".to_string());
     }
 
@@ -155,6 +163,7 @@ pub async fn get_thumbnail(
             })?;
         let thumb_str = thumb_path.to_string_lossy().to_string();
 
+        state_arc.thumb_failures.lock().remove(&path_clone);
         state_arc
             .resolved_thumbs
             .lock()
@@ -301,7 +310,7 @@ pub async fn edit_image(
             preview_dir.join(format!("{}.jpg", blake3::hash(path.as_bytes()).to_hex()));
         let tmp_path = preview_path.with_extension("tmp");
         let mut file = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 85);
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 78);
         image::DynamicImage::ImageRgb8(rgb)
             .write_with_encoder(encoder)
             .map_err(|e| {
@@ -396,24 +405,24 @@ fn copy_jpeg_exif(src_path: &Path, dest_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn export_edited(
+async fn export_edited_to_path(
     path: String,
     dest: String,
     strip_metadata: bool,
     watermark: Option<Vec<u8>>,
     watermark_anchor: Option<String>,
-    state: State<'_, Arc<AppState>>,
+    state_arc: Arc<AppState>,
+    enforce_destination_sandbox: bool,
 ) -> Result<(), String> {
     let src_p = PathBuf::from(&path);
-    if !crate::is_path_safe(&src_p, &state) {
+    if !crate::is_path_safe(&src_p, &state_arc) {
         return Err(
             "Permission denied: source path lies outside safe sandbox boundaries".to_string(),
         );
     }
     let dest_p = PathBuf::from(&dest);
     if let Some(dest_parent) = dest_p.parent() {
-        if !crate::is_path_safe(&dest_parent.to_path_buf(), &state) {
+        if enforce_destination_sandbox && !crate::is_path_safe(dest_parent, &state_arc) {
             return Err(
                 "Permission denied: destination path lies outside safe sandbox boundaries"
                     .to_string(),
@@ -422,7 +431,6 @@ pub async fn export_edited(
     } else {
         return Err("Invalid destination path".to_string());
     }
-    let state_arc = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let edit = state_arc
             .edits
@@ -497,6 +505,57 @@ pub async fn export_edited(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_edited(
+    path: String,
+    dest: String,
+    strip_metadata: bool,
+    watermark: Option<Vec<u8>>,
+    watermark_anchor: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    export_edited_to_path(
+        path,
+        dest,
+        strip_metadata,
+        watermark,
+        watermark_anchor,
+        state.inner().clone(),
+        true,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn export_edited_with_picker(
+    path: String,
+    suggested_name: Option<String>,
+    strip_metadata: bool,
+    watermark: Option<Vec<u8>>,
+    watermark_anchor: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(name) = suggested_name.filter(|name| !name.trim().is_empty()) {
+        dialog = dialog.set_file_name(&name);
+    }
+    let Some(file) = dialog.save_file().await else {
+        return Ok(None);
+    };
+    let dest = file.path().to_string_lossy().to_string();
+    export_edited_to_path(
+        path,
+        dest.clone(),
+        strip_metadata,
+        watermark,
+        watermark_anchor,
+        state.inner().clone(),
+        false,
+    )
+    .await?;
+    Ok(Some(dest))
 }
 
 #[tauri::command]
@@ -832,7 +891,9 @@ pub async fn batch_transcode(
                     image::ImageFormat::Avif => "avif",
                     _ => "dat",
                 };
-                let out_path = dir.join(format!("{}.{}", stem, ext));
+                let hash = blake3::hash(path.to_string_lossy().as_bytes()).to_hex();
+                let suffix = hash.as_str().get(..8).unwrap_or("00000000");
+                let out_path = dir.join(format!("{stem}-folio-{suffix}.{ext}"));
 
                 let img_rgba8 = image::DynamicImage::ImageRgba8(img.into_rgba8());
                 img_rgba8

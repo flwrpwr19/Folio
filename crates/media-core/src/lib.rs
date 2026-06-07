@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
-use exif::{In, Reader, Tag};
+use exif::{Context as ExifContext, In, Reader, Tag};
 use image::ImageReader;
 use image::{DynamicImage, GenericImageView};
 use thiserror::Error;
@@ -758,10 +758,20 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
         .get_field(Tag::FocalLength, In::PRIMARY)
         .map(|f| f.display_value().with_unit(&exif).to_string());
 
-    let parse_gps_coord = |tag: Tag, ref_tag: Tag| -> Option<f64> {
-        let field = exif.get_field(tag, In::PRIMARY)?;
-        let ref_field = exif.get_field(ref_tag, In::PRIMARY)?;
-        let ref_val = ref_field.display_value().to_string();
+    let gps_ifd_field = |num: u16| -> Option<&exif::Field> {
+        exif.fields()
+            .find(|f| f.tag.context() == ExifContext::Gps && f.tag.number() == num)
+            .or_else(|| {
+                let tag = Tag(ExifContext::Gps, num);
+                exif.get_field(tag, In::PRIMARY)
+            })
+    };
+
+    let parse_gps_dms = |num: u16, ref_num: u16, default_ref: &str| -> Option<f64> {
+        let field = gps_ifd_field(num)?;
+        let ref_val = gps_ifd_field(ref_num)
+            .map(|f| f.display_value().to_string())
+            .unwrap_or_else(|| default_ref.to_string());
 
         if let exif::Value::Rational(rationals) = &field.value {
             if rationals.len() >= 3 {
@@ -770,20 +780,18 @@ fn read_full_exif(path: &Path) -> Result<(u16, Option<ExifData>)> {
                 let s = rationals[2].num as f64 / rationals[2].denom.max(1) as f64;
                 let mut val = d + (m / 60.0) + (s / 3600.0);
                 let ref_upper = ref_val.to_uppercase();
-                if ref_upper.contains("S") || ref_upper.contains("W") {
+                if ref_upper.contains('S') || ref_upper.contains('W') {
                     val = -val;
                 }
-                Some(val)
-            } else {
-                None
+                return Some(val);
             }
-        } else {
-            None
         }
+        None
     };
 
-    let latitude = parse_gps_coord(Tag::GPSLatitude, Tag::GPSLatitudeRef);
-    let longitude = parse_gps_coord(Tag::GPSLongitude, Tag::GPSLongitudeRef);
+    // EXIF GPS IFD tag numbers: 1=lat ref, 2=lat, 3=lon ref, 4=lon
+    let latitude = parse_gps_dms(2, 1, "N");
+    let longitude = parse_gps_dms(4, 3, "E");
 
     let has_exif = camera.is_some()
         || aperture.is_some()
@@ -1109,6 +1117,29 @@ mod tests {
         assert!(exif.camera.is_some());
         assert!(exif.latitude.is_some());
         assert!(exif.longitude.is_some());
+    }
+
+    #[test]
+    fn detailed_metadata_reads_gps_ifd_on_pexels_fixture() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let path = testing_fixture("GPS/italy_rome_pexels.jpg");
+        if !path.is_file() {
+            return Ok(());
+        }
+        let metadata = read_metadata(&path)?;
+        let exif = metadata
+            .exif
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("pexels fixture should expose EXIF"))?;
+        let lat = exif
+            .latitude
+            .ok_or_else(|| std::io::Error::other("latitude"))?;
+        let lon = exif
+            .longitude
+            .ok_or_else(|| std::io::Error::other("longitude"))?;
+        assert!((lat - 41.8902).abs() < 0.01, "lat was {lat}");
+        assert!((lon - 12.4922).abs() < 0.01, "lon was {lon}");
+        Ok(())
     }
 
     #[test]

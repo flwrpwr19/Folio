@@ -1,3 +1,35 @@
+# Folio v1.4.0
+
+Folio v1.4.0 is a major workflow, performance, and interface release. It redesigns the core browsing surfaces, adds stronger catalog and map tooling, fixes viewer/editing regressions, and hardens the macOS release package.
+
+## Highlights
+
+- Redesigned the catalog workspace with denser controls, richer cards, filtering, sorting, selection, and metadata-aware actions.
+- Redesigned the photo viewport with a persistent filmstrip/action dock and cleaner top chrome.
+- Added the upgraded map workspace with geotagged clusters, preview pins, focused location trays, map filters, and a real Carto Dark default map style.
+- Refined settings and inspector workspaces for clearer cache, privacy, metadata, and edit controls.
+- Fixed rotation preview rendering so geometric edits replace the image cleanly instead of overlaying a rotated copy.
+- Restored and sped up home recent-library thumbnails with backend-warmed preview thumbnails and concurrent hydration.
+- Added Secure Album Vault storage using AES-256-GCM with macOS Keychain-backed key material when available.
+- Added cancellable backend job tracking for long-running batch operations with progress polling.
+- Added ratings, favorites, smart filter presets, saved smart albums, sidecar metadata export/import, and richer Finder actions.
+- Improved release packaging with a branded DMG pipeline, bundled macOS helpers, current frontend verification, and cleaner app metadata.
+
+## Verification
+
+- `npm run check --prefix frontend`
+- `npm run build --prefix frontend`
+- `cargo check --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `npm run build:macos-release`
+
+## Notes
+
+This release remains macOS-first. The app is not notarized, so unsigned release builds may still require clearing quarantine with `xattr -cr /Applications/Folio.app`.
+
+---
+
 # Folio v1.3.2
 
 Improves backend throughput and responsiveness across indexing, metadata inspection, thumbnail generation, cache reuse, and vault I/O. Also restores raw-image metadata inspection and fixes viewer card animations during the first navigation pass.

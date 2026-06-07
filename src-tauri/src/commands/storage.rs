@@ -426,19 +426,20 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn clear_directory_removes_files_and_reports_size() {
+    fn clear_directory_removes_files_and_reports_size() -> Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir().join(format!("folio_clear_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("a.jpg"), vec![0u8; 128]).unwrap();
-        fs::write(dir.join("b.jpg"), vec![0u8; 64]).unwrap();
+        fs::create_dir_all(&dir)?;
+        fs::write(dir.join("a.jpg"), vec![0u8; 128])?;
+        fs::write(dir.join("b.jpg"), vec![0u8; 64])?;
 
         let (freed, warnings) = clear_directory(&dir);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(freed, 192);
-        assert!(fs::read_dir(&dir).unwrap().next().is_none());
+        assert!(fs::read_dir(&dir)?.next().is_none());
 
         let _ = fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     #[test]

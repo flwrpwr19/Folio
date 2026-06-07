@@ -69,18 +69,30 @@ pub struct AppState {
     pub thumbnail_cache_limit_bytes: RwLock<u64>,
     pub decoded_cache_limit_bytes: RwLock<u64>,
     pub app_handle: parking_lot::RwLock<Option<tauri::AppHandle>>,
+    pub approved_open_paths: Mutex<Vec<PathBuf>>,
+}
+
+fn folio_data_root() -> std::path::PathBuf {
+    let base = dirs::data_dir()
+        .or_else(dirs::cache_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    let root = base.join("folio-app");
+    let _ = std::fs::create_dir_all(&root);
+    root
+}
+
+fn legacy_recents_path() -> std::path::PathBuf {
+    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+    base.join("folio-app").join("recents.json")
 }
 
 pub fn get_recents_path() -> std::path::PathBuf {
-    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
-    let root = base.join("folio-app");
-    let _ = std::fs::create_dir_all(&root);
+    let root = folio_data_root();
     root.join("recents.json")
 }
 
 pub fn load_recent_folders() -> Vec<String> {
-    let path = get_recents_path();
-    if path.exists() {
+    for path in [get_recents_path(), legacy_recents_path()] {
         if let Ok(content) = std::fs::read_to_string(path) {
             if let Ok(list) = serde_json::from_str::<Vec<String>>(&content) {
                 let mut valid_list = Vec::new();
@@ -90,7 +102,10 @@ pub fn load_recent_folders() -> Vec<String> {
                         valid_list.push(p_str);
                     }
                 }
-                return valid_list;
+                if !valid_list.is_empty() {
+                    save_recent_folders(&valid_list);
+                    return valid_list;
+                }
             }
         }
     }
@@ -153,6 +168,42 @@ fn parse_range(header: &str, file_len: u64) -> Option<(u64, u64)> {
     }
 }
 
+fn is_allowed_protocol_origin(origin: &str) -> bool {
+    origin == "tauri://localhost"
+        || origin == "http://tauri.localhost"
+        || origin == "https://tauri.localhost"
+        || origin == "http://localhost:1420"
+        || origin == "http://127.0.0.1:1420"
+}
+
+fn cors_origin(headers: &tauri::http::HeaderMap) -> Option<String> {
+    headers
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .filter(|origin| is_allowed_protocol_origin(origin))
+        .map(str::to_string)
+}
+
+fn protocol_response(
+    status: u16,
+    headers: Vec<(&'static str, String)>,
+    cors: Option<&str>,
+    body: Vec<u8>,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut response = tauri::http::Response::builder().status(status);
+    if let Some(origin) = cors {
+        response = response
+            .header("Access-Control-Allow-Origin", origin)
+            .header("Vary", "Origin");
+    }
+    for (name, value) in headers {
+        response = response.header(name, value);
+    }
+    response
+        .body(body)
+        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
+}
+
 pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
     let Ok(canonical_path) = path.canonicalize() else {
         return false;
@@ -169,6 +220,52 @@ pub fn is_path_safe(path: &Path, state: &AppState) -> bool {
         }
     }
 
+    false
+}
+
+pub fn is_known_library_folder(path: &Path, state: &AppState) -> bool {
+    let Ok(canonical_path) = path.canonicalize() else {
+        return false;
+    };
+
+    if let Some(ref idx) = *state.index.read()
+        && let Ok(idx_root) = idx.root.canonicalize()
+        && (canonical_path == idx_root || canonical_path.starts_with(idx_root))
+    {
+        return true;
+    }
+
+    state.recent_folders.read().iter().any(|recent| {
+        PathBuf::from(recent)
+            .canonicalize()
+            .map(|canonical_recent| canonical_recent == canonical_path)
+            .unwrap_or(false)
+    })
+}
+
+pub fn approve_external_open_path(path: PathBuf, state: &AppState) {
+    if let Ok(canonical_path) = path.canonicalize()
+        && let Ok(mut approved) = state.approved_open_paths.lock()
+    {
+        approved.push(canonical_path);
+        if approved.len() > 32 {
+            let overflow = approved.len().saturating_sub(32);
+            approved.drain(0..overflow);
+        }
+    }
+}
+
+pub fn consume_external_open_path(path: &Path, state: &AppState) -> bool {
+    let Ok(canonical_path) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(mut approved) = state.approved_open_paths.lock() else {
+        return false;
+    };
+    if let Some(pos) = approved.iter().position(|p| p == &canonical_path) {
+        approved.remove(pos);
+        return true;
+    }
     false
 }
 
@@ -190,7 +287,9 @@ pub fn rebuild_canonical_roots(state: &AppState) {
     let recents = state.recent_folders.read();
     for recent_str in recents.iter() {
         let recent_path = PathBuf::from(recent_str);
-        if let Ok(recent_canonical) = recent_path.canonicalize() {
+        if recent_path.is_dir()
+            && let Ok(recent_canonical) = recent_path.canonicalize()
+        {
             new_roots.insert(recent_canonical);
         }
     }
@@ -201,31 +300,37 @@ pub fn rebuild_canonical_roots(state: &AppState) {
 struct PendingOpens(Mutex<Vec<PathBuf>>);
 
 #[tauri::command]
-fn drain_pending_open_paths(state: tauri::State<'_, PendingOpens>) -> Vec<String> {
-    state
-        .0
-        .lock()
-        .unwrap()
+fn drain_pending_open_paths(
+    pending_state: tauri::State<'_, PendingOpens>,
+    app_state: tauri::State<'_, Arc<AppState>>,
+) -> Vec<String> {
+    let Ok(mut pending) = pending_state.0.lock() else {
+        return Vec::new();
+    };
+    pending
         .drain(..)
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| {
+            approve_external_open_path(p.clone(), app_state.inner());
+            p.to_string_lossy().into_owned()
+        })
         .collect()
 }
 
 fn main() {
-    let cache = LibraryCache::open_default().expect("Failed to open cache");
+    let cache = LibraryCache::open_default().unwrap_or_else(|error| {
+        eprintln!("Failed to open Folio cache: {error}");
+        std::process::exit(1);
+    });
+    let lru_capacity = std::num::NonZeroUsize::new(10000).unwrap_or(std::num::NonZeroUsize::MIN);
     let app_state = Arc::new(AppState {
         cache,
         index: RwLock::new(None),
         edits: RwLock::new(HashMap::new()),
         preview_cache: commands::media::ImageLruCache::new(512 * 1024 * 1024), // 512MB RAM preview cache
         recent_folders: RwLock::new(load_recent_folders()),
-        resolved_thumbs: parking_lot::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10000).unwrap(),
-        )),
+        resolved_thumbs: parking_lot::Mutex::new(lru::LruCache::new(lru_capacity)),
         watcher: RwLock::new(None),
-        dominant_colors: parking_lot::Mutex::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(10000).unwrap(),
-        )),
+        dominant_colors: parking_lot::Mutex::new(lru::LruCache::new(lru_capacity)),
         canonical_roots: RwLock::new(HashSet::new()),
         jobs: commands::jobs::JobRegistry::default(),
         vault: commands::vault::VaultRuntime::new(),
@@ -234,6 +339,7 @@ fn main() {
         thumbnail_cache_limit_bytes: RwLock::new(2 * 1024 * 1024 * 1024),
         decoded_cache_limit_bytes: RwLock::new(4 * 1024 * 1024 * 1024),
         app_handle: parking_lot::RwLock::new(None),
+        approved_open_paths: Mutex::new(Vec::new()),
     });
 
     rebuild_canonical_roots(&app_state);
@@ -249,9 +355,11 @@ fn main() {
     }
 
     let state_for_uri = Arc::clone(&app_state);
-    builder
+    let app = builder
         .register_uri_scheme_protocol("folio", move |_ctx, request| {
             let path_str = request.uri().path();
+            let allowed_cors_origin = cors_origin(request.headers());
+            let cors = allowed_cors_origin.as_deref();
             let mut decoded = urlencoding::decode(path_str)
                 .unwrap_or(std::borrow::Cow::Borrowed(path_str))
                 .to_string();
@@ -267,20 +375,18 @@ fn main() {
 
             // Path traversal sandboxing guard
             if !is_path_safe(&path, &state_for_uri) {
-                return tauri::http::Response::builder()
-                    .status(403)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body("403 Forbidden - Outside sandbox".as_bytes().to_vec())
-                    .unwrap();
+                return protocol_response(
+                    403,
+                    Vec::new(),
+                    cors,
+                    "403 Forbidden - Outside sandbox".as_bytes().to_vec(),
+                );
             }
 
             let file_meta = match std::fs::metadata(&path) {
                 Ok(m) => m,
                 Err(_) => {
-                    return tauri::http::Response::builder()
-                        .status(404)
-                        .body(vec![])
-                        .unwrap();
+                    return protocol_response(404, Vec::new(), cors, Vec::new());
                 }
             };
             let file_len = file_meta.len();
@@ -309,11 +415,7 @@ fn main() {
                 .and_then(|v| v.to_str().ok())
             {
                 if if_none_match == etag {
-                    return tauri::http::Response::builder()
-                        .status(304)
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(vec![])
-                        .unwrap();
+                    return protocol_response(304, Vec::new(), cors, Vec::new());
                 }
             }
 
@@ -348,10 +450,7 @@ fn main() {
                         let file = match std::fs::File::open(&path) {
                             Ok(f) => f,
                             Err(_) => {
-                                return tauri::http::Response::builder()
-                                    .status(500)
-                                    .body(vec![])
-                                    .unwrap();
+                                return protocol_response(500, Vec::new(), cors, Vec::new());
                             }
                         };
 
@@ -361,43 +460,43 @@ fn main() {
                         let mut buf = vec![0u8; chunk_size as usize];
                         let bytes_read = file.read(&mut buf).unwrap_or(0);
                         buf.truncate(bytes_read);
-                        return tauri::http::Response::builder()
-                            .status(206)
-                            .header("Content-Type", content_type.as_str())
-                            .header("Accept-Ranges", "bytes")
-                            .header(
-                                "Content-Range",
-                                format!(
-                                    "bytes {}-{}/{}",
-                                    start,
-                                    start.saturating_add(bytes_read as u64).saturating_sub(1),
-                                    file_len
+                        return protocol_response(
+                            206,
+                            vec![
+                                ("Content-Type", content_type.clone()),
+                                ("Accept-Ranges", "bytes".to_string()),
+                                (
+                                    "Content-Range",
+                                    format!(
+                                        "bytes {}-{}/{}",
+                                        start,
+                                        start.saturating_add(bytes_read as u64).saturating_sub(1),
+                                        file_len
+                                    ),
                                 ),
-                            )
-                            .header("Content-Length", bytes_read.to_string())
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(buf)
-                            .unwrap();
+                                ("Content-Length", bytes_read.to_string()),
+                            ],
+                            cors,
+                            buf,
+                        );
                     }
                 }
             }
 
             if file_len > MAX_BUFFERED_PROTOCOL_RESPONSE {
-                return tauri::http::Response::builder()
-                    .status(413)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body("413 Payload Too Large".as_bytes().to_vec())
-                    .unwrap();
+                return protocol_response(
+                    413,
+                    Vec::new(),
+                    cors,
+                    "413 Payload Too Large".as_bytes().to_vec(),
+                );
             }
 
             use std::io::Read;
             let file = match std::fs::File::open(&path) {
                 Ok(f) => f,
                 Err(_) => {
-                    return tauri::http::Response::builder()
-                        .status(404)
-                        .body(vec![])
-                        .unwrap();
+                    return protocol_response(404, Vec::new(), cors, Vec::new());
                 }
             };
             let mut file = std::io::BufReader::new(file);
@@ -408,16 +507,16 @@ fn main() {
             } else {
                 "public, max-age=3600"
             };
-            let mut response = tauri::http::Response::builder()
-                .header("Access-Control-Allow-Origin", "*")
-                .header("Content-Type", content_type.as_str())
-                .header("Cache-Control", cache_val)
-                .header("ETag", etag)
-                .header("Content-Length", data.len().to_string());
+            let mut headers = vec![
+                ("Content-Type", content_type),
+                ("Cache-Control", cache_val.to_string()),
+                ("ETag", etag),
+                ("Content-Length", data.len().to_string()),
+            ];
             if is_video {
-                response = response.header("Accept-Ranges", "bytes");
+                headers.push(("Accept-Ranges", "bytes".to_string()));
             }
-            response.body(data).unwrap()
+            protocol_response(200, headers, cors, data)
         })
         .setup(|app| {
             use tauri::Emitter;
@@ -429,8 +528,11 @@ fn main() {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let mut tray_builder = TrayIconBuilder::new();
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let _tray = tray_builder
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { .. } = event {
                         let app = tray.app_handle();
@@ -492,6 +594,8 @@ fn main() {
             commands::catalog::open_media_at_path,
             drain_pending_open_paths,
             commands::catalog::get_folder_items,
+            commands::catalog::get_folder_preview_summary,
+            commands::catalog::get_map_media_points,
             commands::catalog::get_media_metadata,
             commands::catalog::refresh_active_library,
             commands::catalog::create_physical_folder,
@@ -506,6 +610,7 @@ fn main() {
             commands::media::prepare_edit_preview,
             commands::media::edit_image,
             commands::media::export_edited,
+            commands::media::export_edited_with_picker,
             commands::media::get_dominant_colors,
             commands::media::get_folder_dominant_colors,
             commands::media::find_visual_duplicates,
@@ -571,33 +676,44 @@ fn main() {
             commands::macos::show_file_open_with_help,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Opened { urls } = event {
-                use tauri::Emitter;
-                use tauri::Manager;
-                let paths = {
-                    #[cfg(target_os = "macos")]
-                    {
-                        commands::macos::paths_from_opened_urls(&urls)
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        urls.iter()
-                            .filter_map(|u| u.to_file_path().ok())
-                            .collect::<Vec<_>>()
-                    }
-                };
-                if !paths.is_empty() {
-                    if let Some(pending) = app.try_state::<PendingOpens>() {
-                        pending.0.lock().unwrap().extend(paths.clone());
-                    }
-                    if let Some(path) = paths.last() {
-                        let _ = app.emit("folio-open-path", path.to_string_lossy().to_string());
+        .unwrap_or_else(|error| {
+            eprintln!("Error while building Tauri application: {error}");
+            std::process::exit(1);
+        });
+
+    app.run(|app, event| {
+        if let tauri::RunEvent::Opened { urls } = event {
+            use tauri::Emitter;
+            use tauri::Manager;
+            let paths = {
+                #[cfg(target_os = "macos")]
+                {
+                    commands::macos::paths_from_opened_urls(&urls)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    urls.iter()
+                        .filter_map(|u| u.to_file_path().ok())
+                        .collect::<Vec<_>>()
+                }
+            };
+            if !paths.is_empty() {
+                if let Some(pending) = app.try_state::<PendingOpens>() {
+                    if let Ok(mut pending_paths) = pending.0.lock() {
+                        pending_paths.extend(paths.clone());
                     }
                 }
+                if let Some(state) = app.try_state::<Arc<AppState>>() {
+                    for path in &paths {
+                        approve_external_open_path(path.clone(), state.inner());
+                    }
+                }
+                if let Some(path) = paths.last() {
+                    let _ = app.emit("folio-open-path", path.to_string_lossy().to_string());
+                }
             }
-        });
+        }
+    });
 }
 
 #[cfg(test)]
