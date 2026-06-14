@@ -349,6 +349,18 @@ body {
 .settings-close { background: none; border: none; color: var(--text-tertiary); font-size: 1.3rem; cursor: pointer; transition: color 0.2s ease, transform 0.15s ease; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
 .settings-close:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
 .settings-body { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+.folder-preload-overlay { position: fixed; inset: 0; z-index: 260; display: flex; align-items: center; justify-content: center; background: var(--overlay-bg); backdrop-filter: blur(16px); }
+.folder-preload-panel { width: min(440px, calc(100vw - 32px)); background: var(--modal-bg); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: 0 32px 80px rgba(0,0,0,0.48); padding: 22px; }
+.folder-preload-kicker { color: var(--accent-gold); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; }
+.folder-preload-panel h2 { font-family: var(--font-display); font-weight: 400; font-size: 1.35rem; margin: 0 0 8px; }
+.folder-preload-path { color: var(--text-tertiary); font-size: 0.74rem; line-height: 1.35; margin: 0 0 18px; overflow-wrap: anywhere; }
+.folder-preload-bar { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.08); border: 1px solid var(--border-subtle); }
+.folder-preload-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent-gold), #f2d675); transition: width 0.2s ease; }
+.folder-preload-status { min-height: 20px; margin-top: 10px; color: var(--text-secondary); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.folder-preload-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.folder-preload-actions button { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 12px; cursor: pointer; color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.folder-preload-actions button:disabled { opacity: 0.55; cursor: default; }
+.folder-preload-primary { background: rgba(212,167,44,0.16) !important; border-color: rgba(212,167,44,0.35) !important; }
 .settings-tabs {
   display: flex;
   background: rgba(255, 255, 255, 0.03);

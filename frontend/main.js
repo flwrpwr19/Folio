@@ -726,6 +726,10 @@ app.innerHTML = `
             <label for="prefetchCheck">Prefetch adjacent media</label>
             <input type="checkbox" id="prefetchCheck" checked />
           </div>
+          <div class="setting-row">
+            <label for="preloadFolderCheck">Preload folder before opening</label>
+            <input type="checkbox" id="preloadFolderCheck" />
+          </div>
           <p class="settings-hint">Catalog grid size: ⌘ + / ⌘ − while grid view is open.</p>
           <div class="settings-section-label" style="margin-top: 12px;">Viewer</div>
           <div class="setting-row">
@@ -977,6 +981,7 @@ const highContrastCheck = $('highContrastCheck'),
       thumbCacheLimitInput = $('thumbCacheLimitInput'),
       decodedCacheLimitInput = $('decodedCacheLimitInput'),
       prefetchCheck = $('prefetchCheck'),
+      preloadFolderCheck = $('preloadFolderCheck'),
       performanceHud = $('performanceHud'),
       editorialResizer = $('editorialResizer');
 
@@ -1548,6 +1553,7 @@ let activeColorBlindMode = localStorage.getItem('folio_color_blind') || 'none';
 let activeWatermark = localStorage.getItem('folio_watermark') || '';
 let reverseGeocodeEnabled = localStorage.getItem('folio_reverse_geocode_enabled') === 'true';
 let prefetchEnabled = localStorage.getItem('folio_prefetch_enabled') !== 'false';
+let preloadFolderBeforeOpen = localStorage.getItem('folio_preload_folder_before_open') === 'true';
 let vaultAutoLockMinutes = parseInt(localStorage.getItem('folio_vault_auto_lock_minutes') || '5', 10);
 let thumbnailCacheLimitGb = parseFloat(localStorage.getItem('folio_thumbnail_cache_limit_gb') || '2');
 let decodedCacheLimitGb = parseFloat(localStorage.getItem('folio_decoded_cache_limit_gb') || '4');
@@ -2314,6 +2320,13 @@ if (prefetchCheck) {
     localStorage.setItem('folio_prefetch_enabled', prefetchEnabled);
   });
 }
+if (preloadFolderCheck) {
+  preloadFolderCheck.checked = preloadFolderBeforeOpen;
+  preloadFolderCheck.addEventListener('change', e => {
+    preloadFolderBeforeOpen = e.target.checked;
+    localStorage.setItem('folio_preload_folder_before_open', preloadFolderBeforeOpen);
+  });
+}
 
 function applyColorBlindMode() {
   if (activeColorBlindMode === 'none') {
@@ -2670,10 +2683,112 @@ function togglePick(path) {
   return picks.has(path);
 }
 
+function folderPreloadThumbnailSizes() {
+  const catalogSide = Math.max(
+    CATALOG_THUMB_MIN_SIDE,
+    Math.min(CATALOG_THUMB_MAX_SIDE, Math.ceil((gridThumbSize || 160) * thumbnailPixelRatio())),
+  );
+  return [...new Set([THUMB_DEFAULT_MAX_SIDE, catalogSide])];
+}
+
+function createFolderPreloadOverlay(folderPath) {
+  const overlay = document.createElement('div');
+  overlay.className = 'folder-preload-overlay';
+  overlay.innerHTML = `
+    <div class="folder-preload-panel" role="dialog" aria-modal="true" aria-labelledby="folderPreloadTitle">
+      <div class="folder-preload-kicker">Preparing library</div>
+      <h2 id="folderPreloadTitle">Preloading media</h2>
+      <p class="folder-preload-path"></p>
+      <div class="folder-preload-bar" aria-hidden="true"><div class="folder-preload-fill"></div></div>
+      <div class="folder-preload-status" aria-live="polite">Starting...</div>
+      <div class="folder-preload-actions">
+        <button type="button" class="folder-preload-secondary" data-action="open-now">Cancel and open now</button>
+        <button type="button" class="folder-preload-primary" data-action="cancel">Cancel</button>
+      </div>
+    </div>`;
+  overlay.querySelector('.folder-preload-path').textContent = folderPath;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function updateFolderPreloadOverlay(overlay, status) {
+  if (!overlay || !status) return;
+  const total = status.total || 0;
+  const completed = status.completed || 0;
+  const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const failed = status.failed ? ` · ${status.failed} failed` : '';
+  const state = status.state || 'running';
+  const fill = overlay.querySelector('.folder-preload-fill');
+  const label = overlay.querySelector('.folder-preload-status');
+  if (fill) fill.style.width = `${pct}%`;
+  if (label) {
+    label.textContent = state === 'completed'
+      ? `Ready · ${completed}/${total}${failed}`
+      : state === 'cancelled'
+        ? `Cancelled · ${completed}/${total}${failed}`
+        : `Preloading ${completed}/${total}${failed}`;
+  }
+}
+
+async function maybePreloadFolderBeforeOpen(folderPath, folderItems) {
+  if (!preloadFolderBeforeOpen || !hasTauriRuntime()) return true;
+  const FOLDER_PRELOAD_MAX_ITEMS = 900;
+  const paths = (folderItems || [])
+    .filter(item => item?.path && !item.is_video)
+    .slice(0, FOLDER_PRELOAD_MAX_ITEMS)
+    .map(item => item.path);
+  if (!paths.length) return true;
+
+  const overlay = createFolderPreloadOverlay(folderPath);
+  let cancelMode = null;
+  let started = null;
+  try {
+    const operation = {
+      type: 'folder_preload',
+      paths,
+      thumbnail_sizes: folderPreloadThumbnailSizes(),
+      decode_viewer_images: false,
+    };
+    started = await invoke('start_batch_job', { operation });
+    const cancel = async (mode) => {
+      cancelMode = mode;
+      overlay.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
+      if (started?.job_id) {
+        await invoke('cancel_job', { jobId: started.job_id }).catch(() => {});
+      }
+    };
+    overlay.querySelector('[data-action="open-now"]')?.addEventListener('click', () => {
+      cancel('open-now').catch(() => {});
+    });
+    overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', () => {
+      cancel('cancel').catch(() => {});
+    });
+    await trackJob(invoke, started, status => updateFolderPreloadOverlay(overlay, status));
+    return cancelMode !== 'cancel';
+  } catch (err) {
+    showToast(`Preload failed: ${err}`);
+    return true;
+  } finally {
+    overlay.remove();
+  }
+}
+
+async function openPreparedFolder(folderPath, selectPath = null) {
+  const loadedItems = processLoadedItems(await invoke('get_folder_items'));
+  const shouldOpen = await maybePreloadFolderBeforeOpen(folderPath, loadedItems);
+  if (!shouldOpen) {
+    clearEmptyState(catalogStateHost);
+    clearEmptyState(viewerStateHost);
+    return false;
+  }
+  await loadFolderData(folderPath, selectPath, { preloadedItems: loadedItems, skipPreload: true });
+  return true;
+}
+
 async function openHomeLibraryPath(path) {
   try {
     const p = await invoke('open_specific_folder', { path });
-    await loadFolderData(p);
+    await openPreparedFolder(p);
   } catch (e) {
     console.error(e);
     showToast(`Could not open folder: ${e}`);
@@ -2753,11 +2868,15 @@ function renderEditorialHome() {
   const preview = $('homeEditorialPreview');
   const resumeBtn = $('homeResumeBtn');
   if (!preview || !resumeBtn) return;
+  const chooseBtn = $('openBtnCanvas');
+  if (chooseBtn) chooseBtn.onclick = openFolder;
   const summaries = getLibrarySummaries();
   const latest = summaries[0];
   preview.replaceChildren();
   resumeBtn.disabled = !latest;
-  resumeBtn.textContent = latest ? `Resume ${folderDisplayName(latest.path)}` : 'Choose a library';
+  const latestName = latest ? folderDisplayName(latest.path) : '';
+  resumeBtn.textContent = latest ? `Resume ${truncateDisplayName(latestName, 36)}` : 'Choose a library';
+  resumeBtn.title = latestName ? `Resume ${latestName}` : '';
   resumeBtn.onclick = latest ? () => openHomeLibraryPath(latest.path) : openFolder;
   if (!latest) {
     const empty = document.createElement('div');
@@ -2776,7 +2895,7 @@ function renderEditorialHome() {
     mosaic.classList.add('is-loading');
     ensureHomePreviewSummary(latest.path).catch(() => {});
   }
-  previewPaths.slice(0, 5).forEach((path, index) => mosaic.appendChild(createHomePreviewImage(path, `home-editorial-image home-editorial-image-${index + 1}`, previewThumbs[index])));
+  previewPaths.slice(0, 4).forEach((path, index) => mosaic.appendChild(createHomePreviewImage(path, `home-editorial-image home-editorial-image-${index + 1}`, previewThumbs[index])));
   const caption = document.createElement('div');
   caption.className = 'home-editorial-caption';
   caption.innerHTML = `<strong>${folderDisplayName(latest.path)}</strong><span>${latest.count || 0} items · Last opened ${new Date(latest.openedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>`;
@@ -3147,7 +3266,7 @@ function processLoadedItems(rawItems) {
 async function openMediaFromPath(filePath) {
   try {
     const result = await invoke('open_media_at_path', { filePath });
-    await loadFolderData(result.folder, result.file || null);
+    await openPreparedFolder(result.folder, result.file || null);
     return result;
   } catch (err) {
     showToast(`Could not open file: ${err}`);
@@ -3155,7 +3274,7 @@ async function openMediaFromPath(filePath) {
   }
 }
 
-async function loadFolderData(p, selectPath = null) {
+async function loadFolderData(p, selectPath = null, options = {}) {
   openedLibraryPath = p;
   thumbQueue = [];
   clearEmptyState(catalogStateHost);
@@ -3179,7 +3298,7 @@ async function loadFolderData(p, selectPath = null) {
       showToast('Secure Vault unlocked');
     }
 
-    items = processLoadedItems(await invoke('get_folder_items'));
+    items = options.preloadedItems || processLoadedItems(await invoke('get_folder_items'));
     mapGpsSyncGeneration += 1;
     saveLibrarySummary(p, {
       count: items.length,
@@ -3271,7 +3390,7 @@ async function ensureLibraryItemsForCatalog() {
   if (!recentPath) return false;
   try {
     const p = await invoke('open_specific_folder', { path: recentPath });
-    await loadFolderData(p);
+    await openPreparedFolder(p);
     return items.length > 0;
   } catch (e) {
     console.warn('[Folio] open recent catalog library:', e);
@@ -3295,7 +3414,7 @@ function renderBreadcrumbs(path) {
     crumb.onclick = async () => {
         try {
             const res = await invoke('open_specific_folder', { path: target });
-            loadFolderData(res);
+            openPreparedFolder(res).catch(e => console.error(e));
         } catch(e) { console.error(e); }
     };
     breadcrumbs.appendChild(crumb);
@@ -3326,7 +3445,7 @@ async function openFolder() {
         if (!p) return;
         await rememberLibraryFolder(p);
         renderHomeHub();
-        await loadFolderData(p);
+        await openPreparedFolder(p);
     } catch (e) {
         console.error(e);
         showToast(`Could not open folder: ${e}`);
@@ -3388,8 +3507,8 @@ function applyPhysicalExit(node, dir) {
   ], { duration: VIEWER_TRANSITION_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' }).finished.then(() => node.remove());
 }
 
-const VIEWER_DIRECT_IMAGE_MAX_PIXELS = 48_000_000;
-const VIEWER_DIRECT_IMAGE_MAX_BYTES = 80 * 1024 * 1024;
+const VIEWER_DIRECT_IMAGE_MAX_PIXELS = 28_000_000;
+const VIEWER_DIRECT_IMAGE_MAX_BYTES = 36 * 1024 * 1024;
 const BROWSER_NATIVE_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp']);
 
 function isBrowserNativeImage(item) {
@@ -4169,37 +4288,96 @@ function enqueueThumb(el, p, { priority = false, maxSide = null } = {}) {
 }
 async function processThumbQueue() {
   while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length > 0) {
-    const j = thumbQueue.shift();
-    thumbActive++;
-    loadThumb(j).finally(() => {
-      thumbActive--;
+    const first = thumbQueue.shift();
+    const batch = [first];
+    const batchLimit = Math.min(24, THUMB_CONCURRENCY - thumbActive);
+    for (let i = 0; i < thumbQueue.length && batch.length < batchLimit;) {
+      const candidate = thumbQueue[i];
+      if (candidate.maxSide === first.maxSide && candidate.retries === first.retries) {
+        batch.push(candidate);
+        thumbQueue.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+    thumbActive += batch.length;
+    loadThumbBatch(batch).finally(() => {
+      thumbActive -= batch.length;
       processThumbQueue();
     });
   }
 }
+
+function fallbackThumb({ el, path }) {
+  if (!el || !path || !el.isConnected) return;
+  if (el.classList.contains('catalog-card')) {
+    if (el.classList.contains('loaded')) return;
+    markThumbFailed(el);
+    return;
+  }
+  const img = el.querySelector('img');
+  if (img) {
+    img.onload = () => {
+      img.classList.add('loaded');
+      el.classList.add('loaded');
+      el.classList.remove('is-loading', 'is-failed');
+    };
+    img.onerror = () => markThumbFailed(el);
+    img.src = folioMediaUrl(path);
+  } else {
+    markThumbFailed(el);
+  }
+}
+
+function retryOrFallbackThumb(job) {
+  if (job.retries < 2) {
+    setTimeout(() => {
+      const retryJob = { ...job, retries: job.retries + 1 };
+      if (job.priority) thumbQueue.unshift(retryJob);
+      else thumbQueue.push(retryJob);
+      processThumbQueue();
+    }, 220 * (job.retries + 1));
+  } else {
+    fallbackThumb(job);
+  }
+}
+
+async function loadThumbBatch(jobs) {
+  const validJobs = jobs.filter(({ el, path, generation }) => (
+    el && path && el.isConnected && (generation == null || generation === filmstripThumbGeneration)
+  ));
+  if (!validJobs.length) return;
+  if (validJobs.length === 1) {
+    await loadThumb(validJobs[0]);
+    return;
+  }
+  const maxSide = validJobs[0].maxSide;
+  const paths = [...new Set(validJobs.map(job => job.path))];
+  try {
+    const results = await invoke('get_thumbnails', {
+      paths,
+      maxSide,
+      force: validJobs.some(job => job.retries > 0),
+    });
+    for (const job of validJobs) {
+      if (!job.el.isConnected) continue;
+      if (job.generation != null && job.generation !== filmstripThumbGeneration) continue;
+      const thumbPath = results?.[job.path];
+      if (thumbPath) {
+        const url = `folio://localhost/${encodeURIComponent(thumbPath)}?v=${mediaCacheEpoch}`;
+        applyThumbToElement(job.el, job.path, url, maxSide);
+      } else {
+        retryOrFallbackThumb(job);
+      }
+    }
+  } catch {
+    for (const job of validJobs) retryOrFallbackThumb(job);
+  }
+}
+
 async function loadThumb({ el, path, retries, priority, maxSide, generation }) {
   if (!el || !path || !el.isConnected) return;
   if (generation != null && generation !== filmstripThumbGeneration) return;
-  const fallback = () => {
-    if (el.classList.contains('catalog-card')) {
-      if (el.classList.contains('loaded')) return;
-      markThumbFailed(el);
-      return;
-    }
-    const img = el.querySelector('img');
-    if (img) {
-      img.onload = () => {
-        img.classList.add('loaded');
-        el.classList.add('loaded');
-        el.classList.remove('is-loading', 'is-failed');
-      };
-      img.onerror = () => markThumbFailed(el);
-      img.src = folioMediaUrl(path);
-    } else {
-      markThumbFailed(el);
-    }
-  };
-
   try {
     const key = `${path}:${maxSide}`;
     let request = thumbInflight.get(key);
@@ -4215,14 +4393,7 @@ async function loadThumb({ el, path, retries, priority, maxSide, generation }) {
     const u = `folio://localhost/${encodeURIComponent(tp)}?v=${mediaCacheEpoch}`;
     applyThumbToElement(el, path, u, maxSide);
   } catch (err) {
-    if (retries < 2) {
-      await new Promise(r => setTimeout(r, 220 * (retries + 1)));
-      const retryJob = { el, path, retries: retries + 1, priority, maxSide, generation };
-      if (priority) thumbQueue.unshift(retryJob);
-      else thumbQueue.push(retryJob);
-    } else {
-      fallback();
-    }
+    retryOrFallbackThumb({ el, path, retries, priority, maxSide, generation });
   }
 }
 function filmstripObserverRootMargin() {
@@ -6184,7 +6355,7 @@ currentTauriWebview()?.onDragDropEvent(async (event) => {
       const p = result.folder || paths[0];
       await rememberLibraryFolder(p);
       renderHomeHub();
-      await loadFolderData(p, result.file || null);
+      await openPreparedFolder(p, result.file || null);
     } catch (err) {
       console.error(err);
       showToast(`Could not open dropped item: ${err}`);
@@ -7623,7 +7794,8 @@ function renderCatalogFilterBar() {
 let catalogThumbObs = null;
 const CATALOG_INITIAL_EAGER_THUMBS = 64;
 const CATALOG_CHUNK_EAGER_THUMBS = 24;
-const CATALOG_OVERSCAN_ROWS = 4;
+const CATALOG_OVERSCAN_ROWS = 10;
+const CATALOG_WINDOW_BUCKET_ROWS = 4;
 let catalogScrollRaf = null;
 let catalogVirtualState = { start: -1, end: -1, columns: 0, rowHeight: 0 };
 
@@ -7853,8 +8025,14 @@ function renderCatalogWindow(force = false) {
   const totalRows = Math.ceil(catalogVisibleItems.length / columns);
   const viewportRows = Math.max(1, Math.ceil(catalogContent.clientHeight / rowHeight));
   const scrollRow = Math.max(0, Math.floor(catalogContent.scrollTop / rowHeight));
-  const startRow = Math.max(0, scrollRow - CATALOG_OVERSCAN_ROWS);
-  const endRow = Math.min(totalRows, scrollRow + viewportRows + CATALOG_OVERSCAN_ROWS);
+  const bucketStartRow = Math.floor(Math.max(0, scrollRow - CATALOG_OVERSCAN_ROWS) / CATALOG_WINDOW_BUCKET_ROWS)
+    * CATALOG_WINDOW_BUCKET_ROWS;
+  const startRow = Math.max(0, bucketStartRow);
+  const endRow = Math.min(
+    totalRows,
+    Math.ceil((scrollRow + viewportRows + CATALOG_OVERSCAN_ROWS) / CATALOG_WINDOW_BUCKET_ROWS)
+      * CATALOG_WINDOW_BUCKET_ROWS,
+  );
   const startIndex = startRow * columns;
   const endIndex = Math.min(catalogVisibleItems.length, endRow * columns);
 

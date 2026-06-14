@@ -327,9 +327,21 @@ pub fn open_image(path: &Path) -> Result<DynamicImage> {
             .with_context(|| format!("failed to open image file: {}", path.display()))?
             .with_guessed_format()
             .with_context(|| format!("failed to guess format: {}", path.display()))?;
-        return reader
-            .decode()
-            .with_context(|| format!("failed to decode image: {}", path.display()));
+        match reader.decode() {
+            Ok(img) => return Ok(img),
+            Err(err) if can_use_sips(path) => {
+                return sips_decode(path).with_context(|| {
+                    format!(
+                        "failed to decode image with native decoder ({err}); sips fallback failed for {}",
+                        path.display()
+                    )
+                });
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to decode image: {}", path.display()));
+            }
+        }
     }
 
     // On macOS, always use sips for TIFF and everything else non-native.

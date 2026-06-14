@@ -1,10 +1,11 @@
 use crate::AppState;
 use library_core::rusqlite;
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use tauri::State;
@@ -65,6 +66,11 @@ pub enum BatchOperation {
     ThumbnailWarmup {
         paths: Vec<String>,
         max_side: u32,
+    },
+    FolderPreload {
+        paths: Vec<String>,
+        thumbnail_sizes: Vec<u32>,
+        decode_viewer_images: bool,
     },
     VaultAdd {
         paths: Vec<String>,
@@ -164,6 +170,49 @@ fn validate_paths(paths: &[String], state: &AppState) -> Result<Vec<PathBuf>, St
         .collect()
 }
 
+const VIEWER_DIRECT_IMAGE_MAX_PIXELS: u64 = 28_000_000;
+const VIEWER_DIRECT_IMAGE_MAX_BYTES: u64 = 36 * 1024 * 1024;
+
+fn browser_native_image_ext(ext: &str) -> bool {
+    matches!(ext, "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
+}
+
+pub fn should_preload_decoded_viewer_image(path: &Path, state: &AppState) -> bool {
+    if media_core::is_video_path(path) {
+        return false;
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !browser_native_image_ext(&ext) {
+        return media_core::is_supported_image_path(path);
+    }
+
+    let size = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    if size > VIEWER_DIRECT_IMAGE_MAX_BYTES {
+        return true;
+    }
+
+    let dimensions = state
+        .index
+        .read()
+        .as_ref()
+        .and_then(|index| index.get(path))
+        .map(|item| (item.metadata.width, item.metadata.height))
+        .or_else(|| {
+            media_core::read_metadata_for_index(path)
+                .ok()
+                .map(|metadata| (metadata.width, metadata.height))
+        });
+
+    dimensions
+        .map(|(w, h)| u64::from(w) * u64::from(h) > VIEWER_DIRECT_IMAGE_MAX_PIXELS)
+        .unwrap_or(false)
+}
+
 fn transcode_one(path: &Path, target: &str) -> Result<(), String> {
     let fmt = match target {
         "jpeg" | "jpg" => image::ImageFormat::Jpeg,
@@ -250,6 +299,18 @@ fn operation_total(operation: &BatchOperation) -> usize {
         | BatchOperation::SetFavorite { paths, .. }
         | BatchOperation::ThumbnailWarmup { paths, .. }
         | BatchOperation::VaultAdd { paths } => paths.len(),
+        BatchOperation::FolderPreload {
+            paths,
+            thumbnail_sizes,
+            decode_viewer_images,
+        } => {
+            paths.len() * thumbnail_sizes.len()
+                + if *decode_viewer_images {
+                    paths.len()
+                } else {
+                    0
+                }
+        }
         BatchOperation::VaultExport { ids, .. } => ids.len(),
     }
 }
@@ -264,6 +325,7 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
         BatchOperation::SetRating { .. } => "set_rating",
         BatchOperation::SetFavorite { .. } => "set_favorite",
         BatchOperation::ThumbnailWarmup { .. } => "thumbnail_warmup",
+        BatchOperation::FolderPreload { .. } => "folder_preload",
         BatchOperation::VaultAdd { .. } => "vault_add",
         BatchOperation::VaultExport { .. } => "vault_export",
     }
@@ -411,15 +473,18 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
             std::thread::spawn(move || {
                 let total = path_bufs.len();
                 let parallel = library_core::LibraryCache::cache_parallelism();
-                for (chunk_idx, chunk) in path_bufs.chunks(parallel).enumerate() {
+                let completed = AtomicUsize::new(0);
+                for chunk in path_bufs.chunks(parallel) {
                     if cancel.load(Ordering::SeqCst) {
                         job_update(&thread_state, &thread_job_id, |s| {
                             s.state = "cancelled".to_string();
                         });
                         return;
                     }
-                    for (i, p) in chunk.iter().enumerate() {
-                        let idx = chunk_idx * parallel + i;
+                    chunk.par_iter().for_each(|p| {
+                        if cancel.load(Ordering::SeqCst) {
+                            return;
+                        }
                         let path_key = p.to_string_lossy().to_string();
                         let mut res = thread_state.cache.ensure_thumbnail(p, max_side);
                         if res.is_err() {
@@ -429,18 +494,138 @@ pub fn start_job(operation: BatchOperation, state: Arc<AppState>) -> Result<JobS
                         if let Err(ref e) = res {
                             thread_state.thumb_failures.lock().insert(path_key);
                             let msg = format!("{}: {e}", p.display());
+                            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
                             job_update(&thread_state, &thread_job_id, |s| {
-                                s.completed = idx + 1;
+                                s.completed = done;
                                 push_job_error(s, msg);
                             });
                         } else {
                             thread_state.thumb_failures.lock().remove(&path_key);
+                            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
                             job_update(&thread_state, &thread_job_id, |s| {
-                                s.completed = idx + 1;
+                                s.completed = done;
                             });
                         }
+                    });
+                }
+                let thumb_limit = *thread_state.thumbnail_cache_limit_bytes.read();
+                let _ = thread_state.cache.prune_thumbnails_to_limit(thumb_limit);
+                let decode_limit = *thread_state.decoded_cache_limit_bytes.read();
+                thread_state.cache.prune_decoded_to_limit(decode_limit);
+                job_update(&thread_state, &thread_job_id, |s| {
+                    if s.completed < total {
+                        s.completed = total;
+                    }
+                    s.state = "completed".to_string();
+                });
+            });
+        }
+        BatchOperation::FolderPreload {
+            paths,
+            thumbnail_sizes,
+            decode_viewer_images,
+        } => {
+            let path_bufs = validate_paths(&paths, &state)?;
+            let thumbnail_sizes = {
+                let mut sizes = thumbnail_sizes
+                    .into_iter()
+                    .map(|size| size.clamp(64, 640))
+                    .collect::<Vec<_>>();
+                sizes.sort_unstable();
+                sizes.dedup();
+                if sizes.is_empty() {
+                    sizes.push(192);
+                }
+                sizes
+            };
+            std::thread::spawn(move || {
+                let decode_paths = if decode_viewer_images {
+                    path_bufs
+                        .iter()
+                        .filter(|path| should_preload_decoded_viewer_image(path, &thread_state))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let total = path_bufs.len() * thumbnail_sizes.len() + decode_paths.len();
+                job_update(&thread_state, &thread_job_id, |s| {
+                    s.total = total;
+                });
+
+                let parallel = library_core::LibraryCache::cache_parallelism();
+                let completed = AtomicUsize::new(0);
+
+                for max_side in thumbnail_sizes {
+                    for chunk in path_bufs.chunks(parallel) {
+                        if cancel.load(Ordering::SeqCst) {
+                            job_update(&thread_state, &thread_job_id, |s| {
+                                s.state = "cancelled".to_string();
+                            });
+                            return;
+                        }
+                        chunk.par_iter().for_each(|p| {
+                            if cancel.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            let path_key = p.to_string_lossy().to_string();
+                            let mut res = thread_state.cache.ensure_thumbnail(p, max_side);
+                            if res.is_err() {
+                                thread_state.thumb_failures.lock().remove(&path_key);
+                                res = thread_state.cache.ensure_thumbnail(p, max_side);
+                            }
+                            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                            if let Err(ref e) = res {
+                                thread_state.thumb_failures.lock().insert(path_key);
+                                let msg = format!("{} thumbnail {max_side}: {e}", p.display());
+                                job_update(&thread_state, &thread_job_id, |s| {
+                                    s.completed = done;
+                                    push_job_error(s, msg);
+                                });
+                            } else {
+                                thread_state.thumb_failures.lock().remove(&path_key);
+                                job_update(&thread_state, &thread_job_id, |s| {
+                                    s.completed = done;
+                                });
+                            }
+                        });
                     }
                 }
+
+                for chunk in decode_paths.chunks(parallel) {
+                    if cancel.load(Ordering::SeqCst) {
+                        job_update(&thread_state, &thread_job_id, |s| {
+                            s.state = "cancelled".to_string();
+                        });
+                        return;
+                    }
+                    chunk.par_iter().for_each(|p| {
+                        if cancel.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        let path_key = p.to_string_lossy().to_string();
+                        let mut res = thread_state.cache.ensure_decoded(p);
+                        if res.is_err() {
+                            thread_state.decode_failures.lock().remove(&path_key);
+                            res = thread_state.cache.ensure_decoded(p);
+                        }
+                        let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                        if let Err(ref e) = res {
+                            thread_state.decode_failures.lock().insert(path_key);
+                            let msg = format!("{} decoded: {e}", p.display());
+                            job_update(&thread_state, &thread_job_id, |s| {
+                                s.completed = done;
+                                push_job_error(s, msg);
+                            });
+                        } else {
+                            thread_state.decode_failures.lock().remove(&path_key);
+                            job_update(&thread_state, &thread_job_id, |s| {
+                                s.completed = done;
+                            });
+                        }
+                    });
+                }
+
                 let thumb_limit = *thread_state.thumbnail_cache_limit_bytes.read();
                 let _ = thread_state.cache.prune_thumbnails_to_limit(thumb_limit);
                 let decode_limit = *thread_state.decoded_cache_limit_bytes.read();
@@ -527,7 +712,7 @@ pub async fn cancel_job(job_id: String, state: State<'_, Arc<AppState>>) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::JobRegistry;
+    use super::{BatchOperation, JobRegistry, browser_native_image_ext, operation_total};
 
     #[test]
     fn job_registry_tracks_cancel() {
@@ -535,5 +720,23 @@ mod tests {
         let (id, _) = registry.insert("test".to_string(), 1);
         assert!(registry.cancel(&id));
         assert!(registry.get(&id).is_some());
+    }
+
+    #[test]
+    fn folder_preload_total_counts_thumbnail_sizes_and_decode_candidates_upper_bound() {
+        let operation = BatchOperation::FolderPreload {
+            paths: vec!["/tmp/a.jpg".to_string(), "/tmp/b.heic".to_string()],
+            thumbnail_sizes: vec![192, 640],
+            decode_viewer_images: true,
+        };
+        assert_eq!(operation_total(&operation), 6);
+    }
+
+    #[test]
+    fn browser_native_decode_set_matches_viewer_fast_path() {
+        assert!(browser_native_image_ext("jpg"));
+        assert!(browser_native_image_ext("webp"));
+        assert!(!browser_native_image_ext("heic"));
+        assert!(!browser_native_image_ext("tiff"));
     }
 }

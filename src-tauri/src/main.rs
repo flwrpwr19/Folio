@@ -607,6 +607,7 @@ fn main() {
             commands::media::set_window_vibrancy,
             commands::media::trigger_macos_sound,
             commands::media::get_thumbnail,
+            commands::media::get_thumbnails,
             commands::media::get_full_image,
             commands::media::prepare_edit_preview,
             commands::media::edit_image,

@@ -395,7 +395,7 @@ fn cache_size(files: &Mutex<HashMap<PathBuf, CacheFileInfo>>) -> u64 {
 }
 
 fn should_decode_with_sips(path: &Path) -> bool {
-    const LARGE_DECODE_BYTES: u64 = 80 * 1024 * 1024;
+    const LARGE_DECODE_BYTES: u64 = 36 * 1024 * 1024;
     fs::metadata(path)
         .map(|meta| meta.len() > LARGE_DECODE_BYTES)
         .unwrap_or(false)

@@ -1,6 +1,8 @@
 use crate::AppState;
 use image::GenericImageView;
 use media_core::{SimpleEdit, apply_edit};
+use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
@@ -174,6 +176,74 @@ pub async fn get_thumbnail(
     .map_err(|e| e.to_string())??;
 
     Ok(thumb_path)
+}
+
+#[tauri::command]
+pub async fn get_thumbnails(
+    paths: Vec<String>,
+    max_side: u32,
+    force: Option<bool>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<HashMap<String, String>, String> {
+    let state_arc = state.inner().clone();
+    let force_retry = force.unwrap_or(false);
+    let valid_paths = paths
+        .into_iter()
+        .filter_map(|path| {
+            let p = PathBuf::from(&path);
+            crate::is_path_safe(&p, &state_arc).then_some((path, p))
+        })
+        .collect::<Vec<_>>();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let parallel = library_core::LibraryCache::cache_parallelism();
+        let mut results = HashMap::new();
+
+        for chunk in valid_paths.chunks(parallel) {
+            let chunk_results = chunk
+                .par_iter()
+                .filter_map(|(path, path_buf)| {
+                    {
+                        let cache_key = (path.clone(), max_side);
+                        let mut cache = state_arc.resolved_thumbs.lock();
+                        if let Some(cached_path) = cache.get(&cache_key).cloned()
+                            && PathBuf::from(&cached_path).exists()
+                        {
+                            return Some((path.clone(), cached_path));
+                        }
+                    }
+
+                    if force_retry {
+                        state_arc.thumb_failures.lock().remove(path);
+                    } else if state_arc.thumb_failures.lock().contains(path) {
+                        return None;
+                    }
+
+                    match state_arc.cache.ensure_thumbnail(path_buf, max_side) {
+                        Ok(thumb_path) => {
+                            let thumb_str = thumb_path.to_string_lossy().to_string();
+                            state_arc.thumb_failures.lock().remove(path);
+                            state_arc
+                                .resolved_thumbs
+                                .lock()
+                                .put((path.clone(), max_side), thumb_str.clone());
+                            Some((path.clone(), thumb_str))
+                        }
+                        Err(_) => {
+                            state_arc.thumb_failures.lock().insert(path.clone());
+                            None
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            results.extend(chunk_results);
+        }
+
+        Ok::<HashMap<String, String>, String>(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
