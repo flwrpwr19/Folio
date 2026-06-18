@@ -1,4 +1,6 @@
 /target
+.build/
+core/folio-scanner/target/
 **/*.rs.bk
 .DS_Store
 
