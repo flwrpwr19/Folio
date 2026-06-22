@@ -23,13 +23,3 @@ The dev runner builds the Rust scanner, exports `FOLIO_SCANNER_PATH`, and launch
 cargo test --manifest-path core/folio-scanner/Cargo.toml
 swift build
 ```
-
-## Design Direction
-
-- Chosen home: [Concept 06 Variant B](docs/concept-06-variants.md)
-- Chosen viewport: [Minimal Viewport Option 03](docs/final-home-minimal-viewports.md)
-
-Archived concept docs:
-
-- [Design references and rebuild stack](docs/design-references.md)
-- [Generated design concepts](docs/generated-design-concepts.md)
