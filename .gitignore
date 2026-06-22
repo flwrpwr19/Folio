@@ -14,6 +14,10 @@ frontend/dist/
 # MacOS
 .DS_Store
 
+# Generated assets and local docs
+assets/generated-designs/
+docs/
+
 # AI Tools
 .gemini/
 .cursor/
