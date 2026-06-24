@@ -33,7 +33,7 @@ final class WindowConfiguratorView: NSView {
         window.styleMask.insert([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.minSize = NSSize(width: 980, height: 680)
         window.backgroundColor = NSColor(red: 0.025, green: 0.027, blue: 0.030, alpha: 1)
 
@@ -46,24 +46,6 @@ final class WindowConfiguratorView: NSView {
 }
 
 final class DragRegionView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let trafficLightCenters = [
-            CGPoint(x: 24, y: 26),
-            CGPoint(x: 62, y: 26),
-            CGPoint(x: 100, y: 26)
-        ]
-
-        for center in trafficLightCenters {
-            let dx = point.x - center.x
-            let dy = point.y - center.y
-            if (dx * dx + dy * dy) < 225 {
-                return nil
-            }
-        }
-
-        return self
-    }
-
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
             window?.zoom(nil)

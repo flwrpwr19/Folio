@@ -16,7 +16,22 @@ final class FolioStore: ObservableObject {
     private let lastFolderKey = "folio.lastFolder"
 
     var folderTitle: String {
-        folderURL?.lastPathComponent.nonEmpty ?? "Iceland 2024"
+        folderURL?.lastPathComponent.nonEmpty ?? "No folder selected"
+    }
+
+    var selectedIndex: Int? {
+        guard let selectedItem else { return items.isEmpty ? nil : 0 }
+        return items.firstIndex(of: selectedItem)
+    }
+
+    var canSelectPrevious: Bool {
+        guard let selectedIndex else { return false }
+        return selectedIndex > 0
+    }
+
+    var canSelectNext: Bool {
+        guard let selectedIndex else { return false }
+        return selectedIndex < items.count - 1
     }
 
     var libraryFolders: [LibraryFolder] {
@@ -119,4 +134,3 @@ private extension String {
         isEmpty ? nil : self
     }
 }
-

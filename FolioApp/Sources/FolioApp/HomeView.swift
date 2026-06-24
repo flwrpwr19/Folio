@@ -4,312 +4,365 @@ struct HomeView: View {
     @EnvironmentObject private var store: FolioStore
 
     private var heroItem: MediaItem? { store.selectedItem ?? store.items.first }
-    private var recentItems: [MediaItem] { Array(store.items.prefix(5)) }
+    private var latestItems: [MediaItem] { Array(store.items.prefix(7)) }
+    private var totalBytes: UInt64 { store.items.reduce(0) { $0 + $1.size } }
 
     var body: some View {
         HStack(spacing: 0) {
-            SidebarShell {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Library")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(FolioPalette.muted)
-                    SidebarRow(title: "Home", systemName: "house", isActive: true)
-                    SidebarRow(title: "Collections", systemName: "square.grid.2x2")
-                    SidebarRow(title: "Folders", systemName: "folder")
-                    SidebarRow(title: "All Media", systemName: "photo.on.rectangle")
-                    SidebarRow(title: "Favorites", systemName: "heart")
-                    SidebarRow(title: "Recently Added", systemName: "clock")
-                }
+            sidebar
+            mainContent
+        }
+        .background(Color.clear)
+    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Sources")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(FolioPalette.muted)
-                    SidebarRow(title: "Open Folder", systemName: "folder.badge.plus", action: store.chooseFolder)
-                    SidebarRow(title: store.folderTitle, systemName: "internaldrive", trailing: "\(store.items.count)")
-                }
-
-                VStack(spacing: 12) {
-                    StorageCard()
-                    StatusCard()
+    private var sidebar: some View {
+        SidebarShell {
+            VStack(alignment: .leading, spacing: 7) {
+                SectionEyebrow(text: "Library")
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 2)
+                SidebarRow(title: "Home", systemName: "house", isActive: true)
+                SidebarRow(title: "Browse media", systemName: "photo.on.rectangle") {
+                    store.openViewport()
                 }
             }
 
-            mainContent
+            VStack(alignment: .leading, spacing: 7) {
+                SectionEyebrow(text: "Source")
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 2)
+                SidebarRow(
+                    title: store.folderURL == nil ? "Choose folder" : store.folderTitle,
+                    systemName: store.folderURL == nil ? "folder.badge.plus" : "internaldrive",
+                    trailing: store.folderURL == nil ? nil : store.items.count.formatted(),
+                    action: store.chooseFolder
+                )
+            }
+
+            Spacer(minLength: 0)
+
+            LibraryStatus(
+                title: store.isScanning ? "Scanning library" : (store.items.isEmpty ? "No media loaded" : "Library ready"),
+                detail: store.isScanning ? "Finding supported images" : sidebarStatusDetail,
+                isActive: store.isScanning
+            )
+            .padding(.bottom, 22)
         }
-        .background(FolioPalette.background)
-        .ignoresSafeArea(.container, edges: .top)
     }
 
     private var mainContent: some View {
-        ZStack {
-            DotMatrixField()
-                .offset(x: 70, y: -150)
-                .opacity(0.62)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 22) {
+                header
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 24) {
-                    topBar
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Recent")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(FolioPalette.text)
-                        HeroAlbum(item: heroItem)
-                    }
-
-                    smartAlbums
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Continue browsing")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(FolioPalette.text)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 18) {
-                                ForEach(recentItems) { item in
-                                    RecentCard(item: item)
-                                        .onTapGesture {
-                                            store.select(item)
-                                            store.openViewport()
-                                        }
-                                }
-                                if recentItems.isEmpty {
-                                    EmptyRecentCard()
-                                }
-                            }
-                            .padding(.trailing, 24)
-                        }
-                    }
+                if store.items.isEmpty && !store.isScanning {
+                    EmptyLibraryCard()
+                } else {
+                    overview
+                    latestSection
                 }
-                .padding(.horizontal, 32)
-                .padding(.top, 32)
-                .padding(.bottom, 38)
             }
+            .padding(.horizontal, 28)
+            .padding(.top, 62)
+            .padding(.bottom, 28)
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private var topBar: some View {
-        HStack {
+    private var header: some View {
+        HStack(alignment: .bottom, spacing: 20) {
+            VStack(alignment: .leading, spacing: 7) {
+                SectionEyebrow(text: "Local media library")
+                Text(store.folderURL == nil ? "Your visual archive" : store.folderTitle)
+                    .font(.system(size: 29, weight: .semibold, design: .rounded))
+                    .foregroundStyle(FolioPalette.text)
+                    .lineLimit(1)
+                Text(headerSubtitle)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(FolioPalette.muted)
+            }
+
             Spacer(minLength: 12)
-            SearchPill(placeholder: "Visual search")
-            Spacer()
-            HStack(spacing: 10) {
-                IconButton(systemName: "slider.horizontal.3") {}
-                IconButton(systemName: "bell") {}
-                Button(action: store.chooseFolder) {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(FolioPalette.text.opacity(0.84))
-                        .frame(width: 38, height: 38)
-                        .background(Circle().fill(.white.opacity(0.052)))
-                }
-                .buttonStyle(.plain)
-            }
+
+            PrimaryActionButton(
+                title: store.folderURL == nil ? "Choose folder" : "Change folder",
+                systemName: "arrow.up.right",
+                action: store.chooseFolder
+            )
         }
-        .frame(height: 46)
     }
 
-    private var smartAlbums: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Smart Albums")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(FolioPalette.text)
+    private var overview: some View {
+        HStack(spacing: 14) {
+            LibraryHero(item: heroItem)
+                .frame(maxWidth: .infinity)
 
-            HStack(spacing: 16) {
-                SmartAlbumCard(title: "Favorites", subtitle: "Best moments", icon: "heart", color: FolioPalette.coral)
-                SmartAlbumCard(title: "Recently Added", subtitle: store.status, icon: "clock", color: FolioPalette.teal)
-                SmartAlbumCard(title: "Duplicates", subtitle: "Review later", icon: "square.stack.3d.up", color: FolioPalette.amber)
+            VStack(spacing: 14) {
+                LibraryStatCard(
+                    eyebrow: "Media",
+                    value: store.items.count.formatted(),
+                    caption: store.items.count == 1 ? "image ready to browse" : "images ready to browse",
+                    systemName: "photo.stack",
+                    accent: FolioPalette.teal
+                )
+
+                LibraryStatCard(
+                    eyebrow: "On disk",
+                    value: ByteCountFormatter.string(fromByteCount: Int64(clamping: totalBytes), countStyle: .file),
+                    caption: "read directly from this folder",
+                    systemName: "internaldrive",
+                    accent: FolioPalette.amber
+                )
+            }
+            .frame(width: 242)
+        }
+        .frame(height: 282)
+    }
+
+    private var latestSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Latest media")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(FolioPalette.text)
+                    Text("Most recently modified in this folder")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(FolioPalette.muted)
+                }
+
+                Spacer()
+
+                Button("View all") {
+                    store.openViewport()
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(FolioPalette.amber)
+                .buttonStyle(FolioPressStyle())
+                .help("Browse all media")
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 12) {
+                    ForEach(latestItems) { item in
+                        LatestMediaCard(item: item)
+                    }
+                }
+                .padding(.vertical, 2)
+                .padding(.trailing, 18)
             }
         }
+    }
+
+    private var headerSubtitle: String {
+        if store.isScanning { return "Scanning for supported images…" }
+        guard !store.items.isEmpty else { return "Open a folder to start browsing, with nothing imported or uploaded." }
+        return "\(store.items.count.formatted()) items · \(statusDetail)"
+    }
+
+    private var statusDetail: String {
+        guard let modified = store.items.map(\.modified).max(), modified > 0 else {
+            return store.items.isEmpty ? "Choose a local image folder" : "Stored locally"
+        }
+        let date = Date(timeIntervalSince1970: TimeInterval(modified))
+        return "Latest change \(date.formatted(.relative(presentation: .named)))"
+    }
+
+    private var sidebarStatusDetail: String {
+        guard let modified = store.items.map(\.modified).max(), modified > 0 else {
+            return store.items.isEmpty ? "Choose a local image folder" : "Stored locally"
+        }
+        let date = Date(timeIntervalSince1970: TimeInterval(modified))
+        return "Updated \(date.formatted(.relative(presentation: .named)))"
     }
 }
 
-private struct HeroAlbum: View {
+private struct LibraryHero: View {
     @EnvironmentObject private var store: FolioStore
     let item: MediaItem?
 
     var body: some View {
-        Button(action: store.openViewport) {
-            ZStack(alignment: .bottomLeading) {
-                if let item {
-                    AsyncThumbnail(item: item, target: 1200, contentMode: .fill)
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(2.55, contentMode: .fit)
-                        .clipped()
-                } else {
-                    LinearGradient(
-                        colors: [FolioPalette.panelRaised, FolioPalette.panel],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(2.55, contentMode: .fit)
-                }
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.62)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-
-                HStack(spacing: 14) {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(FolioPalette.text.opacity(0.85))
-                        .frame(width: 50, height: 50)
-                        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(.white.opacity(0.13)))
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(store.folderTitle)
-                            .font(.system(size: 22, weight: .semibold))
-                        Text("\(store.items.count.formatted()) items  ·  \(store.isScanning ? "Scanning" : "Updated now")")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(FolioPalette.text.opacity(0.72))
+        Button {
+            if item == nil {
+                store.chooseFolder()
+            } else {
+                store.openViewport()
+            }
+        } label: {
+            SurfaceShell(radius: 28, inset: 5, innerFill: FolioPalette.panelRaised) {
+                ZStack(alignment: .bottomLeading) {
+                    if let item {
+                        AsyncThumbnail(item: item, target: 920, contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 272)
+                            .clipped()
+                    } else {
+                        LinearGradient(
+                            colors: [FolioPalette.panelRaised, FolioPalette.panel],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .frame(height: 272)
                     }
 
-                    Spacer()
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.16), .black.opacity(0.82)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 272)
 
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundStyle(FolioPalette.text)
-                        .frame(width: 48, height: 48)
-                        .background(Circle().fill(.black.opacity(0.25)).overlay(Circle().stroke(.white.opacity(0.1), lineWidth: 1)))
+                    HStack(alignment: .bottom, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            SectionEyebrow(text: "Current folder")
+                                .foregroundStyle(.white.opacity(0.62))
+                            Text(store.folderTitle)
+                                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Text("\(store.items.count.formatted()) items")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.68))
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Image(systemName: item == nil ? "folder.badge.plus" : "arrow.up.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(.white.opacity(0.14)))
+                    }
+                    .padding(20)
                 }
-                .padding(22)
+                .frame(maxWidth: .infinity)
+                .frame(height: 272)
+                .clipped()
             }
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(.white.opacity(0.11), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.18), radius: 28, x: 0, y: 18)
+            .frame(height: 282)
+            .clipped()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FolioPressStyle())
+        .folioHoverLift()
+        .accessibilityLabel(item == nil ? "Choose an image folder" : "Browse \(store.folderTitle)")
+        .help(item == nil ? "Choose an image folder" : "Open the media viewer")
     }
 }
 
-private struct SmartAlbumCard: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
+private struct LibraryStatCard: View {
+    let eyebrow: String
+    let value: String
+    let caption: String
+    let systemName: String
+    let accent: Color
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 44, height: 44)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(color.opacity(0.36)))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
+        SurfaceShell(radius: 23, inset: 5, innerFill: accent.opacity(0.07)) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    SectionEyebrow(text: eyebrow)
+                    Spacer()
+                    Image(systemName: systemName)
+                        .font(.system(size: 13, weight: .light))
+                        .foregroundStyle(accent)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(accent.opacity(0.10)))
+                }
+
+                Spacer(minLength: 8)
+
+                Text(value)
+                    .font(.system(size: 25, weight: .semibold, design: .rounded))
                     .foregroundStyle(FolioPalette.text)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                Text(subtitle)
-                    .font(.system(size: 13, weight: .medium))
+                    .minimumScaleFactor(0.72)
+                Text(caption)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(FolioPalette.muted)
                     .lineLimit(1)
             }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .foregroundStyle(FolioPalette.text.opacity(0.64))
+            .padding(15)
         }
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, minHeight: 82)
-        .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(color.opacity(0.085))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.070), lineWidth: 1))
-        }
+        .frame(maxHeight: .infinity)
     }
 }
 
-private struct RecentCard: View {
+private struct LatestMediaCard: View {
+    @EnvironmentObject private var store: FolioStore
     let item: MediaItem
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            AsyncThumbnail(item: item, target: 420, contentMode: .fill)
-                .frame(width: 176, height: 126)
-                .clipped()
-            LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .top, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.name)
-                    .lineLimit(1)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(FolioPalette.text)
-                Text(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(FolioPalette.text.opacity(0.68))
-            }
-            .padding(14)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
-    }
-}
+        Button {
+            store.select(item)
+            store.openViewport()
+        } label: {
+            SurfaceShell(radius: 18, inset: 4, innerFill: FolioPalette.panelRaised) {
+                ZStack(alignment: .bottomLeading) {
+                    AsyncThumbnail(item: item, target: 360, contentMode: .fill)
+                        .frame(width: 148, height: 104)
+                        .clipped()
 
-private struct EmptyRecentCard: View {
-    @EnvironmentObject private var store: FolioStore
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.76)],
+                        startPoint: .center,
+                        endPoint: .bottom
+                    )
 
-    var body: some View {
-        Button(action: store.chooseFolder) {
-            VStack(spacing: 12) {
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 24, weight: .regular))
-                    .foregroundStyle(FolioPalette.amber)
-                Text("Open a folder")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(FolioPalette.text)
-            }
-            .frame(width: 176, height: 126)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.052)))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct StorageCard: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Library Storage")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(FolioPalette.muted)
-            Text("Local only")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(FolioPalette.text.opacity(0.85))
-            GeometryReader { proxy in
-                Capsule()
-                    .fill(.white.opacity(0.11))
-                    .overlay(alignment: .leading) {
-                        Capsule()
-                            .fill(FolioPalette.teal)
-                            .frame(width: proxy.size.width * 0.38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.name)
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.62))
                     }
+                    .frame(width: 126, alignment: .leading)
+                    .padding(11)
+                }
+                .frame(width: 148, height: 104)
+                .clipped()
             }
-            .frame(height: 5)
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(0.048)))
+        .buttonStyle(FolioPressStyle())
+        .folioHoverLift()
+        .accessibilityLabel("Open \(item.name)")
+        .help(item.name)
     }
 }
 
-private struct StatusCard: View {
+private struct EmptyLibraryCard: View {
     @EnvironmentObject private var store: FolioStore
 
     var body: some View {
-        HStack {
-            Image(systemName: store.isScanning ? "waveform" : "checkmark.circle")
-                .foregroundStyle(store.isScanning ? FolioPalette.amber : FolioPalette.teal)
-            Text(store.isScanning ? "Scanning" : "All Good")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(FolioPalette.text.opacity(0.85))
-            Spacer()
+        SurfaceShell(radius: 30, inset: 6, innerFill: FolioPalette.panel.opacity(0.82)) {
+            HStack(spacing: 26) {
+                ZStack {
+                    Circle()
+                        .fill(FolioPalette.amber.opacity(0.10))
+                        .frame(width: 92, height: 92)
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 30, weight: .ultraLight))
+                        .foregroundStyle(FolioPalette.amber)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionEyebrow(text: "Start here")
+                    Text("Open an image folder")
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundStyle(FolioPalette.text)
+                    Text("Folio reads your files in place. Nothing is imported, moved, or uploaded.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(FolioPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 18)
+
+                PrimaryActionButton(title: "Choose folder", systemName: "arrow.up.right", action: store.chooseFolder)
+            }
+            .padding(28)
+            .frame(minHeight: 210)
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(0.048)))
     }
 }

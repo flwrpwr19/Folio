@@ -33,7 +33,21 @@ struct FolioApp: App {
                 Button("Show Viewport") {
                     store.openViewport()
                 }
-                .keyboardShortcut("2", modifiers: [.command])
+                    .keyboardShortcut("2", modifiers: [.command])
+            }
+
+            CommandMenu("Navigate") {
+                Button("Previous Image") {
+                    store.selectRelative(-1)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [])
+                .disabled(store.surface != .viewport || !store.canSelectPrevious)
+
+                Button("Next Image") {
+                    store.selectRelative(1)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [])
+                .disabled(store.surface != .viewport || !store.canSelectNext)
             }
         }
     }
@@ -41,16 +55,13 @@ struct FolioApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var store: FolioStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
-            FolioPalette.background.ignoresSafeArea()
+            AmbientBackdrop()
             WindowConfigurator()
                 .frame(width: 0, height: 0)
-
-            DotMatrixField()
-                .opacity(0.72)
-                .ignoresSafeArea()
 
             switch store.surface {
             case .home:
@@ -62,12 +73,17 @@ struct RootView: View {
             }
 
             VStack(spacing: 0) {
-                WindowDragRegion()
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: 86)
+                        .allowsHitTesting(false)
+                    WindowDragRegion()
+                }
                     .frame(height: 52)
                 Spacer(minLength: 0)
             }
             .allowsHitTesting(true)
         }
-        .animation(.smoothFolio, value: store.surface)
+        .animation(reduceMotion ? nil : .smoothFolio, value: store.surface)
     }
 }
