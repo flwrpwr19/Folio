@@ -1,6 +1,6 @@
 # Folio
 
-Folio is a native macOS media browser rebuilt around a cinematic dark home screen and an immersive, minimal image viewport.
+Folio is a native macOS media browser focused on performance and a modern UI/UX experience.
 
 ## Stack
 
