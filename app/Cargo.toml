@@ -1,0 +1,18 @@
+[package]
+name = "folio"
+version = "0.1.0"
+edition = "2024"
+description = "Folio: a fast folder-based photo viewer built with Rune"
+
+[dependencies]
+rune = { workspace = true, features = ["native-file-dialog"] }
+folio-scanner = { path = "../core/folio-scanner" }
+image = { version = "0.25", default-features = false, features = [
+    "jpeg", "png", "gif", "webp", "tiff", "bmp", "dds", "qoi", "tga", "pnm", "hdr", "exr", "ff", "ico",
+] }
+jxl-oxide = { version = "0.12", default-features = false, features = ["rayon"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-image-io = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"

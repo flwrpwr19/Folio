@@ -1,0 +1,432 @@
+{
+  "accessibility": {
+    "bounds": [
+      0.0,
+      0.0,
+      1360.0,
+      880.0
+    ],
+    "children": [
+      {
+        "bounds": [
+          0.0,
+          0.0,
+          1360.0,
+          880.0
+        ],
+        "children": [
+          {
+            "bounds": [
+              0.0,
+              0.0,
+              1360.0,
+              880.0
+            ],
+            "children": [
+              {
+                "bounds": [
+                  0.0,
+                  0.0,
+                  1360.0,
+                  46.0
+                ],
+                "children": [
+                  {
+                    "bounds": [
+                      20.0,
+                      0.0,
+                      34.5,
+                      46.0
+                    ],
+                    "name": "Folio",
+                    "role": "label"
+                  },
+                  {
+                    "bounds": [
+                      68.5,
+                      0.0,
+                      1159.0,
+                      46.0
+                    ],
+                    "name": "Ready",
+                    "role": "label"
+                  },
+                  {
+                    "actions": [
+                      "click"
+                    ],
+                    "bounds": [
+                      1241.5,
+                      0.0,
+                      98.5,
+                      30.0
+                    ],
+                    "children": [
+                      {
+                        "bounds": [
+                          1255.5,
+                          7.5,
+                          70.5,
+                          15.0
+                        ],
+                        "name": "Open Folder",
+                        "role": "label"
+                      }
+                    ],
+                    "key": "open",
+                    "name": "Open Folder",
+                    "role": "button"
+                  }
+                ],
+                "key": "bar",
+                "role": "group"
+              },
+              {
+                "bounds": [
+                  0.0,
+                  46.0,
+                  1360.0,
+                  834.0
+                ],
+                "children": [
+                  {
+                    "bounds": [
+                      657.0,
+                      416.3,
+                      46.0,
+                      25.0
+                    ],
+                    "name": "Folio",
+                    "role": "label"
+                  },
+                  {
+                    "bounds": [
+                      559.8,
+                      451.3,
+                      240.5,
+                      16.5
+                    ],
+                    "name": "Drop a folder anywhere on this window",
+                    "role": "label"
+                  },
+                  {
+                    "actions": [
+                      "click"
+                    ],
+                    "bounds": [
+                      619.3,
+                      477.8,
+                      121.5,
+                      32.0
+                    ],
+                    "children": [
+                      {
+                        "bounds": [
+                          635.3,
+                          485.5,
+                          89.5,
+                          16.5
+                        ],
+                        "name": "Choose Folder",
+                        "role": "label"
+                      }
+                    ],
+                    "name": "Choose Folder",
+                    "role": "button"
+                  }
+                ],
+                "key": "boot",
+                "role": "group"
+              }
+            ],
+            "key": "index",
+            "role": "group"
+          }
+        ],
+        "key": "root",
+        "role": "group"
+      }
+    ],
+    "name": "Folio",
+    "role": "window"
+  },
+  "anim_t": 0.9833333333333347,
+  "animating": false,
+  "dark_system": true,
+  "elements": [
+    {
+      "blur": 0.0,
+      "fill": "#27272bff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "root",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root",
+      "rect": [
+        0.0,
+        0.0,
+        1360.0,
+        880.0
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "index",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index",
+      "rect": [
+        0.0,
+        0.0,
+        1360.0,
+        880.0
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "bar",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/bar",
+      "rect": [
+        0.0,
+        0.0,
+        1360.0,
+        46.0
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/bar/#0",
+      "rect": [
+        20.0,
+        0.0,
+        34.5,
+        46.0
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Folio"
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffff80",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/bar/#1",
+      "rect": [
+        68.5,
+        0.0,
+        1159.0,
+        46.0
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Ready"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "open",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/bar/open",
+      "rect": [
+        1241.5,
+        0.0,
+        98.5,
+        30.0
+      ],
+      "role": "button",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffd9",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/bar/open/#0",
+      "rect": [
+        1255.5,
+        7.5,
+        70.5,
+        15.0
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Open Folder"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "boot",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot",
+      "rect": [
+        0.0,
+        46.0,
+        1360.0,
+        834.0
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot/#0",
+      "rect": [
+        559.75,
+        416.25,
+        240.5,
+        93.5
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot/#0/#0",
+      "rect": [
+        657.0,
+        416.25,
+        46.0,
+        25.0
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Folio"
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffff80",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot/#0/#1",
+      "rect": [
+        559.75,
+        451.25,
+        240.5,
+        16.5
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Drop a folder anywhere on this window"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot/#0/#2",
+      "rect": [
+        619.25,
+        477.75,
+        121.5,
+        32.0
+      ],
+      "role": "button",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffe6",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root/index/boot/#0/#2/#0",
+      "rect": [
+        635.25,
+        485.5,
+        89.5,
+        16.5
+      ],
+      "role": "text",
+      "scale": 1.0,
+      "text": "Choose Folder"
+    }
+  ],
+  "reduced_motion": false,
+  "scale": 2.0,
+  "t": 0.9833333333333333,
+  "time_scale": 1.0,
+  "title": "Folio",
+  "viewport": [
+    1360.0,
+    880.0
+  ],
+  "warnings": []
+}

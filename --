@@ -1,0 +1,2342 @@
+{
+  "accessibility": {
+    "bounds": [
+      0.0,
+      0.0,
+      1360.0,
+      880.0
+    ],
+    "children": [
+      {
+        "bounds": [
+          0.0,
+          0.0,
+          1360.0,
+          880.0
+        ],
+        "children": [
+          {
+            "bounds": [
+              0.8,
+              0.5,
+              1358.4,
+              879.0
+            ],
+            "children": [
+              {
+                "bounds": [
+                  0.8,
+                  0.5,
+                  1358.4,
+                  46.0
+                ],
+                "children": [
+                  {
+                    "bounds": [
+                      20.8,
+                      0.5,
+                      162.8,
+                      46.0
+                    ],
+                    "name": "/tmp/folio-test-photos",
+                    "role": "label"
+                  },
+                  {
+                    "bounds": [
+                      197.6,
+                      0.5,
+                      1029.3,
+                      46.0
+                    ],
+                    "name": "7 images",
+                    "role": "label"
+                  },
+                  {
+                    "actions": [
+                      "click"
+                    ],
+                    "bounds": [
+                      1240.8,
+                      0.5,
+                      98.4,
+                      30.0
+                    ],
+                    "children": [
+                      {
+                        "bounds": [
+                          1254.8,
+                          8.0,
+                          70.4,
+                          15.0
+                        ],
+                        "name": "Open Folder",
+                        "role": "label"
+                      }
+                    ],
+                    "key": "open",
+                    "name": "Open Folder",
+                    "role": "button"
+                  }
+                ],
+                "key": "bar",
+                "role": "group"
+              },
+              {
+                "actions": [
+                  "scroll-up",
+                  "scroll-down",
+                  "set-scroll-offset"
+                ],
+                "bounds": [
+                  0.8,
+                  46.5,
+                  1358.4,
+                  833.0
+                ],
+                "children": [
+                  {
+                    "actions": [
+                      "scroll-into-view"
+                    ],
+                    "bounds": [
+                      20.8,
+                      46.5,
+                      1318.4,
+                      421.5
+                    ],
+                    "children": [
+                      {
+                        "actions": [
+                          "scroll-into-view"
+                        ],
+                        "bounds": [
+                          20.8,
+                          46.5,
+                          1318.4,
+                          209.8
+                        ],
+                        "children": [
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              20.8,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  20.8,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      26.8,
+                                      410.0,
+                                      85.4,
+                                      15.0
+                                    ],
+                                    "name": "00-sunset.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-0",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "00-sunset.png",
+                            "key": "cell-0",
+                            "role": "button"
+                          },
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              232.5,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  232.5,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      238.5,
+                                      410.0,
+                                      79.4,
+                                      15.0
+                                    ],
+                                    "name": "01-ocean.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-1",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "01-ocean.png",
+                            "key": "cell-1",
+                            "role": "button"
+                          },
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              444.3,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  444.3,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      450.3,
+                                      410.0,
+                                      66.9,
+                                      15.0
+                                    ],
+                                    "name": "dark-ui.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-2",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "dark-ui.png",
+                            "key": "cell-2",
+                            "role": "button"
+                          },
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              656.0,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  656.0,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      662.0,
+                                      410.0,
+                                      44.4,
+                                      15.0
+                                    ],
+                                    "name": "diff.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-3",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "diff.png",
+                            "key": "cell-3",
+                            "role": "button"
+                          },
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              867.8,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  867.8,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      873.8,
+                                      410.0,
+                                      80.9,
+                                      15.0
+                                    ],
+                                    "name": "light-chat.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-4",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "light-chat.png",
+                            "key": "cell-4",
+                            "role": "button"
+                          },
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              1079.5,
+                              46.5,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  1079.5,
+                                  222.3,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      1085.5,
+                                      410.0,
+                                      94.4,
+                                      15.0
+                                    ],
+                                    "name": "liquid-metal.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-5",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "liquid-metal.png",
+                            "key": "cell-5",
+                            "role": "button"
+                          }
+                        ],
+                        "key": "row-0",
+                        "position": 1,
+                        "role": "group"
+                      },
+                      {
+                        "actions": [
+                          "scroll-into-view"
+                        ],
+                        "bounds": [
+                          20.8,
+                          258.2,
+                          1318.4,
+                          209.8
+                        ],
+                        "children": [
+                          {
+                            "actions": [
+                              "click",
+                              "scroll-into-view"
+                            ],
+                            "bounds": [
+                              20.8,
+                              258.2,
+                              209.8,
+                              209.8
+                            ],
+                            "children": [
+                              {
+                                "actions": [
+                                  "scroll-into-view"
+                                ],
+                                "bounds": [
+                                  20.8,
+                                  434.0,
+                                  209.8,
+                                  34.0
+                                ],
+                                "children": [
+                                  {
+                                    "actions": [
+                                      "scroll-into-view"
+                                    ],
+                                    "bounds": [
+                                      26.8,
+                                      621.8,
+                                      69.9,
+                                      15.0
+                                    ],
+                                    "name": "session.png",
+                                    "role": "label"
+                                  }
+                                ],
+                                "key": "cap-6",
+                                "role": "group"
+                              }
+                            ],
+                            "description": "session.png",
+                            "key": "cell-6",
+                            "role": "button"
+                          }
+                        ],
+                        "key": "row-1",
+                        "position": 2,
+                        "role": "group"
+                      }
+                    ],
+                    "key": "rows",
+                    "role": "group",
+                    "setSize": 2
+                  }
+                ],
+                "key": "scroll",
+                "role": "scroll-view",
+                "scroll": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "states": [
+                  "clips"
+                ]
+              }
+            ],
+            "key": "index",
+            "role": "group"
+          }
+        ],
+        "key": "root",
+        "role": "group"
+      }
+    ],
+    "name": "Folio",
+    "role": "window"
+  },
+  "anim_t": 0.9833333333333347,
+  "animating": true,
+  "dark_system": true,
+  "elements": [
+    {
+      "blur": 0.0,
+      "fill": "#27272bff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "root",
+      "loopPhase": null,
+      "opacity": 1.0,
+      "path": "root",
+      "rect": [
+        0.0,
+        0.0,
+        1360.0,
+        880.0
+      ],
+      "role": "group",
+      "scale": 1.0
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "index",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.9210000038146973,
+      "path": "root/index",
+      "rect": [
+        0.8,
+        0.52,
+        1358.39,
+        878.97
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        880.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "bar",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.9210000038146973,
+      "path": "root/index/bar",
+      "rect": [
+        0.8,
+        0.52,
+        1358.39,
+        45.95
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        46.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/bar/#0",
+      "rect": [
+        20.78,
+        0.52,
+        162.8,
+        45.95
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        0.0,
+        163.0,
+        46.0
+      ],
+      "text": "/tmp/folio-test-photos"
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffff80",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/bar/#1",
+      "rect": [
+        197.57,
+        0.52,
+        1029.28,
+        45.95
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        197.0,
+        0.0,
+        1030.5,
+        46.0
+      ],
+      "text": "7 images"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "open",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/bar/open",
+      "rect": [
+        1240.84,
+        0.52,
+        98.38,
+        29.97
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        1241.5,
+        0.0,
+        98.5,
+        30.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffd9",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/bar/open/#0",
+      "rect": [
+        1254.82,
+        8.01,
+        70.41,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        1255.5,
+        7.5,
+        70.5,
+        15.0
+      ],
+      "text": "Open Folder"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "scroll",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.9210000038146973,
+      "path": "root/index/scroll",
+      "rect": [
+        0.8,
+        46.47,
+        1358.39,
+        833.02
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        0.0,
+        46.0,
+        1360.0,
+        834.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "rows",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows",
+      "rect": [
+        20.78,
+        46.47,
+        1318.44,
+        421.5
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        46.0,
+        1320.0,
+        422.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "row-0",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0",
+      "rect": [
+        20.78,
+        46.47,
+        1318.44,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        46.0,
+        1320.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "00-sunset.png",
+      "hover": 1.0,
+      "inert": false,
+      "key": "cell-0",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-0",
+      "rect": [
+        20.78,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-0/#0",
+      "rect": [
+        20.78,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-0",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-0/cap-0",
+      "rect": [
+        20.78,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-0/cap-0/#0",
+      "rect": [
+        26.77,
+        410.04,
+        85.4,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        26.0,
+        410.0,
+        85.5,
+        15.0
+      ],
+      "text": "00-sunset.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "01-ocean.png",
+      "inert": false,
+      "key": "cell-1",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-1",
+      "rect": [
+        232.53,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        232.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-1/#0",
+      "rect": [
+        232.53,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        232.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-1",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-1/cap-1",
+      "rect": [
+        232.53,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        232.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-1/cap-1/#0",
+      "rect": [
+        238.52,
+        410.04,
+        79.41,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        238.0,
+        410.0,
+        79.5,
+        15.0
+      ],
+      "text": "01-ocean.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "dark-ui.png",
+      "inert": false,
+      "key": "cell-2",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-2",
+      "rect": [
+        444.28,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        444.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-2/#0",
+      "rect": [
+        444.28,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        444.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-2",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-2/cap-2",
+      "rect": [
+        444.28,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        444.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-2/cap-2/#0",
+      "rect": [
+        450.27,
+        410.04,
+        66.92,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        450.0,
+        410.0,
+        67.0,
+        15.0
+      ],
+      "text": "dark-ui.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "diff.png",
+      "inert": false,
+      "key": "cell-3",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-3",
+      "rect": [
+        656.03,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        656.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-3/#0",
+      "rect": [
+        656.03,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        656.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-3",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-3/cap-3",
+      "rect": [
+        656.03,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        656.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-3/cap-3/#0",
+      "rect": [
+        662.02,
+        410.04,
+        44.45,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        662.0,
+        410.0,
+        44.5,
+        15.0
+      ],
+      "text": "diff.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "light-chat.png",
+      "inert": false,
+      "key": "cell-4",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-4",
+      "rect": [
+        867.78,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        868.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-4/#0",
+      "rect": [
+        867.78,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        868.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-4",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-4/cap-4",
+      "rect": [
+        867.78,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        868.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-4/cap-4/#0",
+      "rect": [
+        873.77,
+        410.04,
+        80.9,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        874.0,
+        410.0,
+        81.0,
+        15.0
+      ],
+      "text": "light-chat.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "liquid-metal.png",
+      "inert": false,
+      "key": "cell-5",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-5",
+      "rect": [
+        1079.53,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        1080.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-0/cell-5/#0",
+      "rect": [
+        1079.53,
+        46.47,
+        209.75,
+        209.75
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        1080.0,
+        46.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-5",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-5/cap-5",
+      "rect": [
+        1079.53,
+        222.26,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        1080.0,
+        222.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-0/cell-5/cap-5/#0",
+      "rect": [
+        1085.52,
+        410.04,
+        94.38,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        1086.0,
+        410.0,
+        94.5,
+        15.0
+      ],
+      "text": "liquid-metal.png"
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "row-1",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-1",
+      "rect": [
+        20.78,
+        258.21,
+        1318.44,
+        209.76
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        258.0,
+        1320.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#3f3f42ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "session.png",
+      "inert": false,
+      "key": "cell-6",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-1/cell-6",
+      "rect": [
+        20.78,
+        258.21,
+        209.75,
+        209.76
+      ],
+      "role": "button",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        258.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.8489999771118164,
+      "path": "root/index/scroll/rows/row-1/cell-6/#0",
+      "rect": [
+        20.78,
+        258.21,
+        209.75,
+        209.76
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        258.0,
+        210.0,
+        210.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "key": "cap-6",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-1/cell-6/cap-6",
+      "rect": [
+        20.78,
+        434.01,
+        209.75,
+        33.96
+      ],
+      "role": "group",
+      "scale": 0.9987999796867371,
+      "target": [
+        20.0,
+        434.0,
+        210.0,
+        34.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffeb",
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": false,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.0,
+      "path": "root/index/scroll/rows/row-1/cell-6/cap-6/#0",
+      "rect": [
+        26.77,
+        621.79,
+        69.91,
+        14.98
+      ],
+      "role": "text",
+      "scale": 0.9987999796867371,
+      "target": [
+        26.0,
+        622.0,
+        70.0,
+        15.0
+      ],
+      "text": "session.png"
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "slide",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide",
+      "rect": [
+        9.86,
+        6.38,
+        1340.28,
+        867.23
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        880.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "dragstrip",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/dragstrip",
+      "rect": [
+        9.86,
+        6.38,
+        1340.28,
+        37.45
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        38.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#000000ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "stage",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/stage",
+      "rect": [
+        9.86,
+        6.38,
+        1340.28,
+        772.63
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        784.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "world",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/stage/world",
+      "rect": [
+        9.86,
+        6.38,
+        1340.28,
+        772.63
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        784.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "img-0",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/stage/world/img-0",
+      "rect": [
+        9.86,
+        6.38,
+        1340.28,
+        772.63
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        0.0,
+        1360.0,
+        784.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#0000008c",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "tray",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray",
+      "rect": [
+        9.86,
+        779.01,
+        1340.28,
+        94.61
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        784.0,
+        1360.0,
+        96.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "tray-strip",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip",
+      "rect": [
+        9.86,
+        779.01,
+        1340.28,
+        94.61
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        0.0,
+        784.0,
+        1360.0,
+        96.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "00-sunset.png",
+      "inert": true,
+      "key": "tray-0",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-0",
+      "rect": [
+        29.57,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        20.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-0/#0",
+      "rect": [
+        30.55,
+        780.0,
+        90.67,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        21.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "01-ocean.png",
+      "inert": true,
+      "key": "tray-1",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-1",
+      "rect": [
+        130.09,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        122.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-1/#0",
+      "rect": [
+        131.08,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        123.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "dark-ui.png",
+      "inert": true,
+      "key": "tray-2",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-2",
+      "rect": [
+        230.61,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        224.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-2/#0",
+      "rect": [
+        231.6,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        225.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "diff.png",
+      "inert": true,
+      "key": "tray-3",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-3",
+      "rect": [
+        331.13,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        326.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-3/#0",
+      "rect": [
+        332.12,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        327.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "light-chat.png",
+      "inert": true,
+      "key": "tray-4",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-4",
+      "rect": [
+        431.66,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        428.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-4/#0",
+      "rect": [
+        432.64,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        429.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "liquid-metal.png",
+      "inert": true,
+      "key": "tray-5",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-5",
+      "rect": [
+        532.17,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        530.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-5/#0",
+      "rect": [
+        533.16,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        531.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#454548ff",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "help": "session.png",
+      "inert": true,
+      "key": "tray-6",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-6",
+      "rect": [
+        632.7,
+        779.01,
+        94.61,
+        61.1
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        632.0,
+        784.0,
+        96.0,
+        62.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/tray/tray-strip/tray-6/#0",
+      "rect": [
+        633.68,
+        780.0,
+        90.66,
+        57.16
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        633.0,
+        785.0,
+        92.0,
+        58.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffff8c",
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/#3",
+      "rect": [
+        29.57,
+        110.84,
+        202.03,
+        14.78
+      ],
+      "role": "text",
+      "scale": 0.9854999780654907,
+      "target": [
+        20.0,
+        106.0,
+        205.0,
+        15.0
+      ],
+      "text": "00-sunset.png  · 1 of 7 · 1600 × 1000"
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "key": "slide-controls",
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/slide-controls",
+      "rect": [
+        1178.66,
+        20.18,
+        155.7,
+        27.59
+      ],
+      "role": "group",
+      "scale": 0.9854999780654907,
+      "target": [
+        1186.0,
+        14.0,
+        158.0,
+        28.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000073",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/slide-controls/#0",
+      "rect": [
+        1178.66,
+        20.18,
+        54.7,
+        27.59
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        1186.0,
+        14.0,
+        55.5,
+        28.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffcc",
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/slide-controls/#0/#0",
+      "rect": [
+        1190.48,
+        26.59,
+        31.05,
+        14.78
+      ],
+      "role": "text",
+      "scale": 0.9854999780654907,
+      "target": [
+        1198.0,
+        20.5,
+        31.5,
+        15.0
+      ],
+      "text": "Index"
+    },
+    {
+      "blur": 0.0,
+      "exiting": true,
+      "fill": "#00000073",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/slide-controls/#1",
+      "rect": [
+        1241.24,
+        20.18,
+        93.13,
+        27.59
+      ],
+      "role": "button",
+      "scale": 0.9854999780654907,
+      "target": [
+        1249.5,
+        14.0,
+        94.5,
+        28.0
+      ]
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffffcc",
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/slide-controls/#1/#0",
+      "rect": [
+        1253.07,
+        26.59,
+        69.48,
+        14.78
+      ],
+      "role": "text",
+      "scale": 0.9854999780654907,
+      "target": [
+        1261.5,
+        20.5,
+        70.5,
+        15.0
+      ],
+      "text": "Open Folder"
+    },
+    {
+      "blur": 0.0,
+      "color": "#ffffff66",
+      "exiting": true,
+      "fill": "#00000000",
+      "focusVisible": false,
+      "focusable": false,
+      "focused": false,
+      "inert": true,
+      "loopPhase": null,
+      "moving": true,
+      "opacity": 0.032999999821186066,
+      "path": "root/slide/#5",
+      "rect": [
+        92.64,
+        28.06,
+        295.65,
+        14.78
+      ],
+      "role": "text",
+      "scale": 0.9854999780654907,
+      "target": [
+        84.0,
+        22.0,
+        300.0,
+        15.0
+      ],
+      "text": "/tmp/folio-test-photos"
+    }
+  ],
+  "reduced_motion": false,
+  "scale": 2.0,
+  "t": 0.9833333333333333,
+  "time_scale": 1.0,
+  "title": "Folio",
+  "viewport": [
+    1360.0,
+    880.0
+  ],
+  "warnings": []
+}
